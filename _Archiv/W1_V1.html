@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>SPEAK Story V1 - final</title>
+  <script src="https://unpkg.com/jspsych@6.3.1/jspsych.js"></script>
+  <link href="https://unpkg.com/jspsych@6.3.1/css/jspsych.css" rel="stylesheet">
+  <script src="https://unpkg.com/jspsych@6.3.1/plugins/jspsych-html-button-response.js"></script>
+  <style>
+    body { background:#fcfcfc; font-family: Arial, sans-serif; }
+    .center { text-align:center; }
+    .story-img { display:block; margin:18px auto; width:420px; max-width:90%; border-radius:12px; }
+    .next-btn { background:none; border:none; cursor:pointer; }
+    .next-btn img { height:56px; }
+    .hide { display:none !important; }
+    .clickable { cursor:pointer; box-shadow:0 0 0 6px rgba(80,200,120,0.25); }
+    .info { color:#666; font-size:0.95em; margin-top:8px; }
+    pre { background:#fff; padding:8px; border-radius:6px; max-height:220px; overflow:auto; }
+  </style>
+</head>
+<body>
+<div id="jspsych-target"></div>
+
+<script>
+// =================== Hilfsfunktionen ===================
+function now() { return new Date().toISOString(); }
+function uid(prefix) { return prefix + "_" + Date.now() + "_" + Math.floor(Math.random()*100000); }
+
+// CSV-Leser (Semikolon-getrennt, zeilengetreu)
+async function loadCSV_lines(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error("Fehler beim Laden der CSV: " + resp.status);
+  const text = await resp.text();
+  const rawLines = text.split(/\r?\n/);
+  let headerLineIndex = null;
+  for (let i = 0; i < rawLines.length; i++) {
+    if (rawLines[i].trim() !== "") { headerLineIndex = i; break; }
+  }
+  if (headerLineIndex === null) return [];
+  const headerParts = rawLines[headerLineIndex].split(";").map(h => h.trim());
+  const data = [];
+  for (let i = headerLineIndex + 1; i < rawLines.length; i++) {
+    const line = rawLines[i].trim();
+    if (!line) continue;
+    const parts = line.split(";").map(p => p.trim());
+    const obj = {};
+    for (let j = 0; j < headerParts.length; j++) {
+      obj[headerParts[j]] = (j < parts.length) ? parts[j] : "";
+    }
+    data.push(obj);
+  }
+  return data;
+}
+
+// makeAudio + playAudio (Promise-basiert)
+function makeAudio(src) {
+  try { const a = new Audio(src); a.preload = 'auto'; return a; } catch(e) { console.warn("makeAudio failed", src, e); return null; }
+}
+function playAudio(elem) {
+  return new Promise((resolve) => {
+    if (!elem) return resolve({status:"no_element"});
+    try { elem.pause(); elem.currentTime = 0; } catch(e){}
+    let playPromise;
+    try { playPromise = elem.play(); } catch(err) { console.warn(now(),"play() threw", err); return resolve({status:"play_throw", error:err}); }
+    if (playPromise && typeof playPromise.then === "function") {
+      playPromise.then(()=> console.log(now(),"PLAY STARTED", elem.src)).catch(err => { console.warn(now(),"PLAY BLOCKED", elem.src, err); return resolve({status:"blocked", error:err}); });
+    } else {
+      console.log(now(),"PLAY INVOKED (no promise)", elem.src);
+    }
+    let finished = false;
+    function cleanup(res) { if (finished) return; finished=true; elem.removeEventListener('ended', onEnded); elem.removeEventListener('error', onError); resolve(res); }
+    function onEnded() { console.log(now(),"ENDED", elem.src); cleanup({status:"ended"}); }
+    function onError(e) { console.warn(now(),"AUDIO ERROR", elem.src, e); cleanup({status:"error", error:e}); }
+    elem.addEventListener('ended', onEnded);
+    elem.addEventListener('error', onError);
+  });
+}
+
+// GLOBALER AUDIO-LOCK (serialisiert play-Aufrufe)
+window.__audioLock = { busy: false, queue: [] };
+function acquireAudioLock() {
+  return new Promise(resolve => {
+    if (!window.__audioLock.busy) {
+      window.__audioLock.busy = true;
+      return resolve();
+    }
+    window.__audioLock.queue.push(resolve);
+  });
+}
+function releaseAudioLock() {
+  if (window.__audioLock.queue.length > 0) {
+    const next = window.__audioLock.queue.shift();
+    next();
+  } else {
+    window.__audioLock.busy = false;
+  }
+}
+
+// Nutzerinteraktion: Browser-Autoplay vermeiden
+let __userInteractedResolve;
+const __userInteracted = new Promise(resolve => { __userInteractedResolve = resolve; });
+function enableUserInteractionListener() {
+  function once() {
+    window.removeEventListener('click', once);
+    window.removeEventListener('keydown', once);
+    __userInteractedResolve();
+  }
+  window.addEventListener('click', once, { once: true });
+  window.addEventListener('keydown', once, { once: true });
+}
+function waitForUserInteraction() { return __userInteracted; }
+
+// =================== Hauptlogik ===================
+(async function main() {
+  // CSV laden
+  let rows = [];
+  try {
+    rows = await loadCSV_lines('data/K2_W1_V1_task.csv');
+    console.log("CSV Zeilen (erste 8):"); for (let i=0;i<Math.min(rows.length,8);i++) console.log(i, rows[i]);
+  } catch(err) {
+    console.error("CSV load failed:", err);
+    jsPsych.init({ timeline:[{ type:"html-button-response", stimulus:"<h2>Fehler beim Laden der CSV</h2><p>Überprüfe Pfad/Server.</p>", choices:["OK"] }], display_element:'jspsych-target' });
+    return;
+  }
+
+  // Normalisiere Reihenfolge aus CSV
+  const storyStimuli = rows
+    .filter(r => r && (r.story_audio || r.show_on_screen))
+    .map(r => ({
+      story_audio: (r.story_audio || "").trim(),
+      show_on_screen: (r.show_on_screen || "").trim(),
+      target: (r.target || "").trim(),
+      target_audio: (r.target_audio || "").trim(),
+      definition_audio: (r.definition_audio || "").trim()
+    }));
+
+  console.log("PARSED STORY ARRAY (order):", storyStimuli.map(s=>s.story_audio));
+
+  // Willkommens-Screen mit SPEAK-Logo und Startpfeil
+const welcomeTrial = {
+  type: "html-button-response",
+  stimulus: `
+    <div class="center" style="margin-top:24px;">
+      <img src="stimuli/SPEAK_transparenter_HG.png" alt="SPEAK" style="height:120px; display:block; margin:0 auto 18px auto;">
+    <div style="color:#009999; font-size:1.15em;">Willkommen in Woche 1!</div>
+      <div style="color:#348f50; font-size:1.15em;">Klicke auf den grünen Pfeil, um zu starten.</div>
+      <div style="margin-top:18px;">
+        <button class="next-btn" id="welcome-start"><img src="stimuli/next.png" alt="Start"></button>
+      </div>
+    </div>
+  `,
+  choices: [""],
+  button_html: `<button class="next-btn" id="welcome-start"><img src="stimuli/next.png" alt="Start"></button>`,
+  on_load: function () {
+    // sorgt dafür, dass nach dem Klick Audio-Play nicht blockiert wird
+    enableUserInteractionListener();
+    const btn = document.getElementById('welcome-start');
+    btn.onclick = function () {
+      try { if (typeof __userInteractedResolve === 'function') __userInteractedResolve(); } catch(e){}
+      jsPsych.finishTrial();
+    };
+  }
+};
+
+  // SINGLE Trial: Sequenz läuft seriell hier
+  const singleTrial = {
+    type: "html-button-response",
+    stimulus: `
+      <div class="center">
+        <img id="single-scene" class="story-img" src="stimuli/${storyStimuli[0] ? storyStimuli[0].show_on_screen : 'i_002.jpg'}" alt="Szene">
+        <div id="single-info" class="info">Klicke den grünen Pfeil, um zu starten.</div>
+        <div style="margin-top:18px;">
+          <button id="single-next" class="next-btn"><img src="stimuli/next.png" alt="Weiter"></button>
+        </div>
+      </div>
+    `,
+    choices: [],
+    on_load: function() {
+      const img = document.getElementById('single-scene');
+      const info = document.getElementById('single-info');
+      const nextBtn = document.getElementById('single-next');
+
+      // Enable interaction listener so play() is allowed after first user action
+      enableUserInteractionListener();
+
+      // Start der sequenziellen Abarbeitung erst nach Klick/Tasten-Interaktion
+      (async function runAllRows(){
+        await waitForUserInteraction();
+
+        for (let idx = 0; idx < storyStimuli.length; idx++) {
+          const row = storyStimuli[idx];
+          console.log(now(),"=== ROW", idx+1, "expected story:", row.story_audio, "show:", row.show_on_screen);
+
+          // 1) Scene + story
+          img.src = "stimuli/" + row.show_on_screen;
+          info.textContent = "Höre die Geschichte an.";
+          const aStory = row.story_audio ? makeAudio('stimuli/' + row.story_audio) : null;
+
+          if (aStory) {
+            console.log(now(),"START story", row.story_audio, "row", idx+1);
+            await acquireAudioLock();
+            try {
+              const res = await playAudio(aStory);
+              if (res && res.status === "blocked") {
+                // blocked -> allow user to click image to initiate play
+                console.log(now(),"STORY blocked - waiting for click to play", row.story_audio);
+                await new Promise(resolveClick => {
+                  img.style.cursor = 'pointer';
+                  function handler() {
+                    img.removeEventListener('click', handler);
+                    img.style.cursor = '';
+                    acquireAudioLock().then(async () => {
+                      try { await playAudio(aStory); } catch(e) {}
+                      releaseAudioLock();
+                      resolveClick();
+                    });
+                  }
+                  img.addEventListener('click', handler, { once: true });
+                });
+              } else {
+                console.log(now(),"END story", row.story_audio, "row", idx+1);
+              }
+            } finally { releaseAudioLock(); }
+          } else {
+            console.log(now(),"NO story audio for row", idx+1);
+          }
+
+          // 2) Target phase if available
+          if (row.target && (row.target_audio || row.definition_audio)) {
+            img.src = "stimuli/" + row.target;
+            console.log(now(),"SHOW target", row.target, "row", idx+1);
+
+            const aTarget = row.target_audio ? makeAudio('stimuli/' + row.target_audio) : null;
+            if (aTarget) {
+              console.log(now(),"START target", row.target_audio, "row", idx+1);
+              await acquireAudioLock();
+              try {
+                const tres = await playAudio(aTarget);
+                if (tres && tres.status === "blocked") {
+                  console.log(now(),"TARGET blocked - waiting for click to play", row.target_audio);
+                  await new Promise(resolveClick => {
+                    img.style.cursor = 'pointer';
+                    function handler() {
+                      img.removeEventListener('click', handler);
+                      img.style.cursor = '';
+                      acquireAudioLock().then(async () => {
+                        try { await playAudio(aTarget); } catch(e) {}
+                        releaseAudioLock();
+                        resolveClick();
+                      });
+                    }
+                    img.addEventListener('click', handler, { once: true });
+                  });
+                } else {
+                  console.log(now(),"END target", row.target_audio, "row", idx+1);
+                }
+              } finally { releaseAudioLock(); }
+            } else {
+              console.log(now(),"NO target audio for row", idx+1);
+            }
+
+            // Make target clickable for definition
+            info.textContent = "Klicke auf das Bild, um die Worterklärung zu hören.";
+            img.style.pointerEvents = 'auto';
+            img.classList.add('clickable');
+
+            await new Promise((resolveClick) => {
+              img.addEventListener('click', async function handler() {
+                img.removeEventListener('click', handler);
+                img.style.pointerEvents = 'none';
+                img.classList.remove('clickable');
+                img.style.boxShadow = "0 0 0 8px rgba(80,200,120,0.25)";
+
+                if (row.definition_audio) {
+                  const aDef = makeAudio('stimuli/' + row.definition_audio);
+                  console.log(now(),"START def", row.definition_audio, "row", idx+1);
+                  await acquireAudioLock();
+                  try {
+                    const dres = await playAudio(aDef);
+                    if (dres && dres.status === "blocked") {
+                      console.log(now(),"DEF blocked (no fallback)", row.definition_audio);
+                    } else {
+                      console.log(now(),"END def", row.definition_audio, "row", idx+1);
+                    }
+                  } finally { releaseAudioLock(); }
+                } else {
+                  console.log(now(),"NO def audio for row", idx+1);
+                }
+
+                // Show Next and wait for click
+                info.textContent = "Klicke den grünen Pfeil, um weiterzumachen.";
+                await new Promise(resolveNext => {
+                  nextBtn.onclick = function() { nextBtn.onclick = null; resolveNext(); };
+                });
+                resolveClick();
+              }, { once: true });
+            });
+
+          } else {
+            // no target -> show Next immediately
+            info.textContent = "Klicke den grünen Pfeil, um weiterzumachen.";
+            await new Promise(resolveNext => {
+              nextBtn.onclick = function() { nextBtn.onclick = null; resolveNext(); };
+            });
+          }
+
+          // small visual reset
+          img.style.boxShadow = "";
+        }
+
+        // finished all rows
+        info.textContent = "Geschafft! Du hast alle Zeilen gehört.";
+        img.src = "stimuli/i_002.jpg";
+        nextBtn.onclick = function() { jsPsych.finishTrial(); };
+      })().catch(err => {
+        console.error("Sequenz-Fehler:", err);
+        document.getElementById('single-info').textContent = "Fehler aufgetreten. Klicke Weiter.";
+        document.getElementById('single-next').onclick = function(){ jsPsych.finishTrial(); };
+      });
+    } // end on_load
+  }; // singleTrial
+
+  // Init jsPsych mit einem Trial
+  jsPsych.init({
+  timeline: [welcomeTrial, singleTrial],
+  display_element: 'jspsych-target',
+  on_finish: function () { jsPsych.data.displayData(); }
+});
+
+})(); // main
+</script>
+</body>
+</html>
+
