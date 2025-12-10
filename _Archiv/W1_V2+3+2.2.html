@@ -78,41 +78,57 @@ Promise.all([
 
   // --- Instruktion
   timeline.push({
-    type: "html-button-response",
-    stimulus: `
-      <img src="stimuli/SPEAK_transparenter_HG.png" style="height:90px; margin-bottom:14px; display:block; margin-left:auto; margin-right:auto;">
-      <h2>Willkommen zur Übung Woche ${week}</h2>
-      <img src="${explanationImage}" style="max-width:420px"><br>
-      <p>Bitte lies die Aufgabenstellung sorgfältig.<br>Wenn du bereit bist, klicke auf "Start".</p>
-    `,
-    choices: [''],
-    button_html: `<button class="next-btn"><img src="stimuli/next.png" alt="Weiter"></button>`
-  });
+  type: "html-button-response",
+  stimulus: `
+    <img src="stimuli/SPEAK_transparenter_HG.png" style="height:90px; margin-bottom:14px; display:block; margin-left:auto; margin-right:auto;">
+    <h2>Willkommen zur Übung Woche ${week}</h2>
+    <img src="${explanationImage}" style="max-width:420px"><br>
+    <p>Bitte lies die Aufgabenstellung sorgfältig.<br>Wenn du bereit bist, klicke auf "Start".</p>
+    <audio id="instr-audio" src="${explanationAudio}"></audio>
+  `,
+  choices: [""],
+  button_html: `<button class="next-btn hide" id="instr-next-btn"><img src="stimuli/next_small.png" alt="Weiter"></button>`,
+  on_load: function() {
+    const audio = document.getElementById("instr-audio");
+    const nextBtn = document.getElementById("instr-next-btn");
+    // Mauszeiger ausblenden während Audio läuft
+    document.body.style.cursor = "none";
+    audio.play();
+    audio.onended = () => {
+      nextBtn.classList.remove('hide');
+      document.body.style.cursor = "";
+    };
+    nextBtn.onclick = function() {
+      jsPsych.finishTrial();
+    };
+  }
+});
+
 
   // --- Erklärung (Speaker)
   timeline.push({
-    type: "html-button-response",
-    stimulus: `
-      <img src="stimuli/SPEAK_transparenter_HG.png" style="height:90px; margin-bottom:14px; display:block; margin-left:auto; margin-right:auto;">
-      <img src="${explanationImage}" style="max-width:420px; display:block; margin:0 auto 20px auto;">
-      <div style="text-align:center;">
-        <button id="play-explanation-audio" class="speaker-btn">
-          <img src="stimuli/speaker.png" alt="Play">
-        </button>
-        <audio id="explanation-audio" src="${explanationAudio}"></audio>
-        <div style="font-size:1.1em; color:#8BC53F; font-weight:bold; margin-top:8px;">Zum Anhören hier klicken!</div>
-      </div>
-    `,
-    choices: [""],
-    button_html: `<button class="next-btn"><img src="stimuli/next.png" alt="Weiter"></button>`,
-    on_load: function() {
-      document.getElementById("play-explanation-audio").addEventListener("click", function() {
-        var audio = document.getElementById("explanation-audio");
-        audio.currentTime = 0;
-        audio.play();
-        this.querySelector('img').src = "stimuli/speaker_playing.png";
-        audio.onended = () => { this.querySelector('img').src = "stimuli/speaker.png"; };
-      });
+  type: "html-button-response",
+  stimulus: `
+    <img src="stimuli/SPEAK_transparenter_HG.png" style="height:90px; margin-bottom:14px; display:block; margin-left:auto; margin-right:auto;">
+    <img src="${explanationImage}" style="max-width:420px; display:block; margin:0 auto 20px auto;">
+    <audio id="explanation-audio" src="${explanationAudio}"></audio>
+  `,
+  choices: [""],
+  button_html: `<button class="next-btn hide" id="explanation-next-btn"><img src="stimuli/next_small.png" alt="Weiter"></button>`,
+  on_load: function() {
+    const audio = document.getElementById("explanation-audio");
+    const nextBtn = document.getElementById("explanation-next-btn");
+    document.body.style.cursor = "none";
+    audio.play();
+    audio.onended = () => {
+      nextBtn.classList.remove('hide');
+      document.body.style.cursor = "";
+    };
+    nextBtn.onclick = function() {
+      jsPsych.finishTrial();
+    };
+  }
+});
     },
     prompt: `<div style="margin-top: 16px;">Drücke auf den Lautsprecher, um dir die Aufgabe anzuhören. Danach kannst du auf „Weiter“ klicken.</div>`
   });
