@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>SPEAK W12 G3</title>
+
+<!--
+  jsPsych core library (v6.3.1).
+  Provides the experiment engine, timeline control, and trial lifecycle.
+-->
+<script src="https://unpkg.com/jspsych@6.3.1/jspsych.js"></script>
+
+<!--
+  jsPsych plugin: html-button-response.
+  Used to render arbitrary HTML stimuli and manually control progression.
+-->
+<script src="https://unpkg.com/jspsych@6.3.1/plugins/jspsych-html-button-response.js"></script>
+
+<!--
+  Default jsPsych CSS for baseline layout and display handling.
+-->
+<link href="https://unpkg.com/jspsych@6.3.1/css/jspsych.css" rel="stylesheet">
+
+<!--
+  PapaParse library for client-side CSV loading and parsing.
+  Enables configuration-driven experiment logic.
+-->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+<!--
+  Google Font loading for consistent typography.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ABeeZee&display=swap" rel="stylesheet">
+
+<style>
+/*
+  Global page reset and background.
+*/
+body{ background:#fff; margin:0; padding:0; }
+
+/*
+  Enforce font usage inside jsPsych-rendered content.
+*/
+.jspsych-display-element,
+.jspsych-display-element *{
+  font-family:"ABeeZee", sans-serif;
+}
+
+/*
+  Main layout container.
+  Fixed width centered layout for desktop/tablet screens.
+*/
+.wrap{
+  width:980px;
+  margin:0 auto;
+  padding-top:20px;
+}
+
+/*
+  Small label in the top-right corner indicating task ID.
+*/
+.topLabel{
+  position:absolute;
+  right:30px;
+  top:20px;
+  font-size:22px;
+}
+
+/*
+  Container for the upper stimulus row.
+*/
+.topRow{
+  position:relative;
+  height:auto;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-start;
+  gap:12px;
+}
+
+/*
+  Speaker icon for task-level audio playback.
+*/
+.taskSpeaker{
+  height:120px;
+  cursor:pointer;
+}
+
+/*
+  Row containing the interactive tiles.
+*/
+.tileRow{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:18px;
+  margin-top:12px;
+}
+
+/*
+  Base tile styling.
+  Tiles act as visual and interactive units.
+*/
+.tile{
+  width:210px;
+  height:170px;
+  border-radius:26px;
+  border:6px solid #2f3438;
+  background:#fff;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  position:relative;
+  box-sizing:border-box;
+}
+
+/*
+  Gray background variant for image tiles.
+*/
+.tile.grayBg{ background:#d8d8d8; }
+
+/*
+  Stimulus images inside tiles.
+*/
+.tile img.stim{
+  max-width:190px;
+  max-height:150px;
+}
+
+/*
+  Article text styling.
+  Very large font to emphasize grammatical markers.
+*/
+.articleTxt{
+  font-size:92px;
+  line-height:1;
+  user-select:none;
+}
+
+/*
+  Highlight overlays.
+  Positioned absolutely on top of tiles.
+*/
+.highlight{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  display:none;
+  pointer-events:none;
+}
+
+/*
+  Indicates tiles that can be clicked.
+*/
+.tile.clickable{ cursor:pointer; }
+
+/*
+  Red outline used to mark incorrect selections.
+*/
+.tile.chosenBad{ outline:12px solid #e10000; outline-offset:6px; }
+
+/*
+  Navigation row containing the next button.
+*/
+.navRow{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  margin-top:18px;
+}
+
+/*
+  Navigation arrow styling.
+*/
+.navRow img{
+  height:120px;
+  cursor:pointer;
+}
+
+/*
+  Disabled navigation arrow.
+*/
+.navRow img.disabled{
+  cursor:default;
+}
+
+/*
+  Title card layout for the introduction screen.
+*/
+.titleCard{
+  width:760px;
+  margin:0 auto;
+  text-align:center;
+}
+
+/*
+  Title image styling.
+*/
+.titleCard img.titleImg{
+  width:760px;
+  border-radius:18px;
+}
+
+/*
+  Speaker + navigation row on the title screen.
+*/
+.speakerRow{
+  margin-top:14px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+}
+
+/*
+  Speaker icons on the title screen.
+*/
+.speakerRow img{
+  height:120px;
+  cursor:pointer;
+}
+
+/*
+  Framed variant for title images.
+*/
+.titleImg.framed{
+  border:6px solid #bbbbbb;
+  border-radius:18px;
+  box-sizing:border-box;
+}
+</style>
+</head>
+
+<body>
+
+<!--
+  jsPsych will render all content into this container.
+-->
+<div id="jspsych-target"></div>
+
+<script>
+/*
+  Base path configuration.
+  Allows moving the entire experiment without rewriting paths.
+*/
+const BASE = "/speakjspsych/";
+const DATA = BASE + "data/";
+const STIM = BASE + "stimuli_V_3/";
+
+/*
+  Loads a CSV file and returns a Promise resolving to cleaned rows.
+  Empty or whitespace-only rows are filtered out.
+*/
+function loadCSV(url){
+  return new Promise(resolve=>{
+    Papa.parse(url,{
+      header:true,
+      download:true,
+      complete:r=>{
+        const rows = (r.data || []).filter(x=>
+          x && Object.values(x).some(v=>String(v||"").trim()!=="")
+        );
+        resolve(rows);
+      }
+    });
+  });
+}
+
+/*
+  Plays an audio file and resolves when playback ends.
+  Gracefully handles missing or placeholder audio entries.
+*/
+function playAudio(file){
+  return new Promise(resolve=>{
+    if(!file || file==="None.mp3"){
+      resolve();
+      return;
+    }
+    const a = new Audio(STIM + file);
+    a.play().catch(()=>resolve());
+    a.onended = ()=>resolve();
+  });
+}
+
+/*
+  Shows a highlight overlay by element ID.
+*/
+function showHL(id){
+  const el = document.getElementById(id);
+  if(el) el.style.display="block";
+}
+
+/*
+  Hides a highlight overlay by element ID.
+*/
+function hideHL(id){
+  const el = document.getElementById(id);
+  if(el) el.style.display="none";
+}
+
+/*
+  Enables or disables the next button visually and logically.
+*/
+function setNextEnabled(enabled){
+  const nx = document.getElementById("nx");
+  if(!nx) return;
+  if(enabled){
+    nx.src = STIM + "next.png";
+    nx.classList.remove("disabled");
+    nx.dataset.enabled="1";
+  } else {
+    nx.src = STIM + "next_empty.png";
+    nx.classList.add("disabled");
+    nx.dataset.enabled="0";
+  }
+}
+
+/*
+  Main async experiment wrapper.
+*/
+(async function(){
+
+/*
+  Load CSV-driven configuration and trial definitions.
+*/
+const general  = (await loadCSV(DATA+"K2_W12_G3_general.csv"))[0] || {};
+const examples = await loadCSV(DATA+"K2_W12_G3_example.csv");
+const tasks    = await loadCSV(DATA+"K2_W12_G3_task.csv");
+
+/*
+  Title / instruction screen.
+  Forces the participant to listen to the explanation audio before continuing.
+*/
+const title = {
+  type:"html-button-response",
+  choices:[],
+  stimulus:`
+    <div class="wrap">
+      <div class="titleCard">
+        <div class="center" style="margin-top:40px;">
+          <h2>Woche 12 – Aufgabe G3</h2>
+          <p style="font-size:20px; margin-bottom:14px;">
+            Hör dir die Erklärung an. Klicke danach auf den Pfeil, um zu starten.
+          </p>
+
+          <img class="titleImg framed" src="${STIM}Week12_G3.png">
+
+          <div class="speakerRow">
+            <img id="sp" src="${STIM}speaker.png">
+            <img id="nx" class="disabled" src="${STIM}next_empty.png" data-enabled="0">
+            <audio id="au" src="${STIM}${general.explanation_audio || ""}"></audio>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  on_load(){
+    const sp=document.getElementById("sp");
+    const nx=document.getElementById("nx");
+    const au=document.getElementById("au");
+    let can=false;
+
+    /*
+      Plays the explanation audio and updates speaker icon.
+    */
+    function play(){
+      sp.src = STIM + "speaker_playing.png";
+      au.currentTime=0;
+      au.play().catch(()=>{});
+    }
+
+    sp.onclick=play;
+
+    /*
+      Enables progression only after audio playback completes.
+    */
+    au.onended=()=>{
+      sp.src = STIM + "speaker.png";
+      can=true;
+      setNextEnabled(true);
+    };
+
+    nx.onclick=()=>{
+      if(!can) return;
+      jsPsych.finishTrial();
+    };
+  }
+};
+
+/*
+  Generates the HTML layout for both example and task trials.
+  Mode controls whether tiles are interactive.
+*/
+function layoutStimulus(row, mode){
+  const img3 = row.image3 || "";
+  const img2 = row.image2 || "";
+  const a1 = row.article1 || "";
+  const a2 = row.article2 || "";
+  const c1 = row.color1 || "red";
+  const c2 = row.color2 || "blue";
+
+  const taskSpeakerHtml = mode === "clickable"
+    ? `<img id="spTask" class="taskSpeaker" src="${STIM}speaker.png">`
+    : ``;
+
+  return `
+    <div class="wrap">
+      <div class="topRow" style="flex-direction:column; gap:12px;">
+        ${taskSpeakerHtml}
+        <div class="topLabel">G3</div>
+
+        <div class="tile grayBg" id="topImg3Tile">
+          <img class="stim" id="topImg3" src="${STIM}${img3}">
+          <img class="highlight" id="hl_topImg3" src="${STIM}highlight_box_orange.png">
+        </div>
+      </div>
+
+      <div class="tileRow">
+        <div class="tile grayBg ${mode}" id="tile_img2">
+          <img class="stim" id="img2" src="${STIM}${img2}">
+          <img class="highlight" id="hl_img2" src="${STIM}highlight_box_orange.png">
+        </div>
+
+        <div class="tile ${mode}" id="tile_a1">
+          <div class="articleTxt" id="a1" style="color:${c1}">${a1}</div>
+          <img class="highlight" id="hl_a1" src="${STIM}highlight_box_orange.png">
+          <img class="highlight" id="yl_a1" src="${STIM}highlight_box_yellow.png">
+        </div>
+
+        <div class="tile ${mode}" id="tile_a2">
+          <div class="articleTxt" id="a2" style="color:${c2}">${a2}</div>
+          <img class="highlight" id="hl_a2" src="${STIM}highlight_box_orange.png">
+          <img class="highlight" id="yl_a2" src="${STIM}highlight_box_yellow.png">
+        </div>
+
+        <div class="tile grayBg ${mode}" id="tile_img3">
+          <img class="stim" id="img3" src="${STIM}${img3}">
+          <img class="highlight" id="hl_img3" src="${STIM}highlight_box_orange.png">
+        </div>
+      </div>
+
+      <div class="navRow">
+        <img id="nx" class="disabled" src="${STIM}next_empty.png" data-enabled="0">
+      </div>
+    </div>
+  `;
+}
+
+/*
+  Example trials.
+  Fully guided, non-interactive demonstrations of the correct solution.
+*/
+function exampleTrial(row){
+  return {
+    type:"html-button-response",
+    choices:[],
+    stimulus: layoutStimulus(row, ""),
+    on_load: async function(){
+
+      setNextEnabled(false);
+
+      const correct = row.correct_article;
+      const correctAudio =
+        correct === "article1" ? row.article1_audio : row.article2_audio;
+
+      showHL("hl_topImg3");
+      await playAudio(row.pre_sentence);
+      hideHL("hl_topImg3");
+
+      showHL("hl_topImg3");
+      await playAudio(row.image3_audio);
+      hideHL("hl_topImg3");
+
+      showHL("hl_img2");
+      await playAudio(row.image2_audio);
+      hideHL("hl_img2");
+
+      const artHL = correct === "article1" ? "hl_a1" : "hl_a2";
+      showHL(artHL);
+      await playAudio(correctAudio);
+      hideHL(artHL);
+
+      showHL("hl_img3");
+      await playAudio(row.image3_audio);
+      hideHL("hl_img3");
+
+      setNextEnabled(true);
+      document.getElementById("nx").onclick = ()=>jsPsych.finishTrial();
+    }
+  };
+}
+
+/*
+  Interactive task trials.
+  Handles user choices, feedback, retries, and final resolution.
+*/
+function taskTrial(row){
+  return {
+    type:"html-button-response",
+    choices:[],
+    stimulus: layoutStimulus(row, "clickable"),
+    on_load: function(){
+
+      const correct = row.correct_article;
+      let attempts = 0;
+      let chosen = null;
+      let locked = false;
+      let preDone = false;
+      let speakerHeard = false;
+
+      const nx = document.getElementById("nx");
+      setNextEnabled(false);
+
+      const tileA1 = document.getElementById("tile_a1");
+      const tileA2 = document.getElementById("tile_a2");
+
+      function hideYellow(){
+        const y1 = document.getElementById("yl_a1");
+        const y2 = document.getElementById("yl_a2");
+        if(y1) y1.style.display = "none";
+        if(y2) y2.style.display = "none";
+      }
+
+      function clearBadOutlines(){
+        tileA1.classList.remove("chosenBad");
+        tileA2.classList.remove("chosenBad");
+      }
+
+      function resetChoice(){
+        chosen = null;
+        hideYellow();
+        clearBadOutlines();
+        setNextEnabled(false);
+      }
+
+      async function highlightPlay(hl, audio){
+        showHL(hl);
+        await playAudio(audio);
+        hideHL(hl);
+      }
+
+      /*
+        Plays the pre-sentence audio.
+        This gate must be completed before enabling progression.
+      */
+      async function playPreSentence(){
+        if(locked) return;
+        locked = true;
+
+        const spTask = document.getElementById("spTask");
+        if(spTask) spTask.src = STIM + "speaker_playing.png";
+
+        await highlightPlay("hl_topImg3", row.pre_sentence);
+
+        if(spTask) spTask.src = STIM + "speaker.png";
+        preDone = true;
+        speakerHeard = true;
+        locked = false;
+
+        if(chosen){
+          setNextEnabled(true);
+        }
+      }
+
+      async function clickTopImg3(){
+        if(locked) return;
+
+        if(!preDone){
+          await playPreSentence();
+          return;
+        }
+
+        locked = true;
+        await highlightPlay("hl_topImg3", row.image3_audio);
+        locked = false;
+      }
+
+      async function clickBottomImg3(){
+        if(locked) return;
+        locked = true;
+
+        if(!preDone){
+          await playPreSentence();
+        } else {
+          await highlightPlay("hl_img3", row.image3_audio);
+        }
+
+        locked = false;
+      }
+
+      async function clickImg2(){
+        if(locked) return;
+        locked = true;
+        await highlightPlay("hl_img2", row.image2_audio);
+        locked = false;
+      }
+
+      async function chooseArticle(which){
+        if(locked) return;
+        locked = true;
+
+        resetChoice();
+        chosen = which;
+
+        if(which === "article1"){
+          showHL("yl_a1");
+          await highlightPlay("hl_a1", row.article1_audio);
+        } else {
+          showHL("yl_a2");
+          await highlightPlay("hl_a2", row.article2_audio);
+        }
+
+        if(speakerHeard){
+          setNextEnabled(true);
+        }
+        locked = false;
+      }
+
+      /*
+        Handles validation of the user's choice when pressing next.
+      */
+      nx.onclick = async ()=>{
+        if(nx.dataset.enabled!=="1") return;
+        if(!chosen) return;
+
+        attempts++;
+
+        const chosenTile = (chosen === "article1") ? tileA1 : tileA2;
+
+        if(chosen === correct){
+          nx.src = STIM + "stars.png";
+          await playAudio("stars_correct.mp3");
+          await playAudio(row.whole_sentence);
+          jsPsych.finishTrial();
+          return;
+        }
+
+        hideYellow();
+        clearBadOutlines();
+        chosenTile.classList.add("chosenBad");
+
+        if(attempts === 1){
+          await playAudio(row.incorrect_first_time);
+          resetChoice();
+          return;
+        }
+
+        await playAudio(row.incorrect_second_time);
+
+        clearBadOutlines();
+        hideYellow();
+
+        if(correct === "article1"){
+          showHL("yl_a1");
+        } else {
+          showHL("yl_a2");
+        }
+
+        await playAudio(row.whole_sentence);
+        jsPsych.finishTrial();
+      };
+
+      const spTask = document.getElementById("spTask");
+      if(spTask) spTask.onclick = playPreSentence;
+
+      document.getElementById("topImg3Tile").onclick = clickTopImg3;
+      document.getElementById("tile_img2").onclick = clickImg2;
+
+      tileA1.onclick = ()=>chooseArticle("article1");
+      tileA2.onclick = ()=>chooseArticle("article2");
+    }
+  };
+}
+
+/*
+  Final goodbye screen.
+*/
+const end = {
+  type:"html-button-response",
+  choices:[],
+  stimulus:`
+    <div class="wrap">
+      <div class="topRow">
+        <div class="topLabel">G3</div>
+      </div>
+      <div class="center" style="margin-top:20px;">
+        <img src="${STIM}i_002.jpg" style="width:320px;border-radius:18px;">
+      </div>
+      <div class="navRow">
+        <img id="nx" src="${STIM}next.png">
+      </div>
+      <audio id="au" src="${STIM}${general.goodbye_audio || ""}"></audio>
+    </div>
+  `,
+  on_load(){
+    const au=document.getElementById("au");
+    if(au && au.src) au.play().catch(()=>{});
+    document.getElementById("nx").onclick=()=>jsPsych.finishTrial();
+  }
+};
+
+/*
+  Timeline assembly.
+  Order: title -> examples -> tasks -> end.
+*/
+const timeline = [];
+timeline.push(title);
+examples.forEach(r=>timeline.push(exampleTrial(r)));
+tasks.forEach(r=>timeline.push(taskTrial(r)));
+timeline.push(end);
+
+/*
+  Start jsPsych with the constructed timeline.
+*/
+jsPsych.init({
+  timeline,
+  display_element:"jspsych-target"
+});
+
+})();
+</script>
+</body>
+</html>

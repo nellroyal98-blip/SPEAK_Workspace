@@ -17,11 +17,25 @@
   <!-- PapaParse is used for CSV loading. -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ABeeZee&display=swap" rel="stylesheet">
   <style>
     /* Basic UI styling. Color scheme tuned to SPEAK design. */
-    body { background:#fcfcfc; font-family: Arial, sans-serif; }
-    .center { text-align:center; }
-    .hide { display:none !important; }
+    body {
+  background:#fcfcfc;
+  margin: 0;
+}
+
+/* UI helpers bleiben unverändert */
+.center { text-align:center; }
+.hide { display:none !important; }
+
+/* HIER passiert die Typografie */
+.jspsych-display-element,
+.jspsych-display-element * {
+  font-family: "ABeeZee", sans-serif;
+}
 
     /* Next button and icon style. */
     .next-btn { background:none; border:none; cursor:pointer; }
@@ -54,6 +68,8 @@
     /* Instruction and final big images. */
     .big-instr { display:block; margin:0 auto 18px auto; height:370px; }
     .final-big { display:block; margin:0 auto 18px auto; height:320px; }
+
+    
   </style>
 </head>
 <body>

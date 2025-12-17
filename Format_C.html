@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>SPEAK W12 V5</title>
+
+  <!-- jsPsych 6.3 -->
+  <script src="https://unpkg.com/jspsych@6.3.1/jspsych.js"></script>
+  <script src="https://unpkg.com/jspsych@6.3.1/plugins/jspsych-html-button-response.js"></script>
+  <link href="https://unpkg.com/jspsych@6.3.1/css/jspsych.css" rel="stylesheet">
+
+  <!-- PapaParse -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ABeeZee&display=swap" rel="stylesheet">
+
+
+  <style>
+    body {
+      background:#fcfcfc;
+      margin:0;
+    }
+
+    .jspsych-display-element,
+    .jspsych-display-element * {
+      font-family: "ABeeZee", sans-serif;
+    }
+
+    .center { text-align:center; }
+
+    .speaker-btn {
+      background:none; border:none; cursor:pointer;
+    }
+    .speaker-btn img { height:70px; }
+
+    .next-btn {
+      background:none; border:none; cursor:pointer;
+    }
+    .next-btn img { height:64px; }
+
+    .hide { display:none; }
+
+    .target-img {
+      width:260px;
+      border-radius:20px;
+      transition: box-shadow 0.2s;
+      cursor:pointer;
+    }
+
+    .highlight-orange {
+      box-shadow: 0 0 0 10px rgba(255,140,0,0.9);
+    }
+    .start-title {
+  font-size: 2em;
+  margin-bottom: 10px;
+}
+
+.start-subtitle {
+  font-size: 1.1em;
+  margin-bottom: 20px;
+  color: #555;
+}
+
+  </style>
+</head>
+
+<body>
+<div id="jspsych-target"></div>
+
+<script>
+/* ===============================
+   CSV LOADER
+=============================== */
+function loadCSV(url){
+  return new Promise((resolve,reject)=>{
+    Papa.parse(url,{
+      header:true,
+      download:true,
+      complete: r => resolve(r.data.filter(row =>
+        Object.values(row).some(v => v && v.trim && v.trim() !== "")
+      )),
+      error: e => reject(e)
+    });
+  });
+}
+
+/* ===============================
+   MAIN
+=============================== */
+(async function main(){
+
+  let general, trials;
+
+  try {
+    general = await loadCSV("data/K2_W12_V5_general.csv");
+    trials  = await loadCSV("data/K2_W12_V5_task.csv");
+  } catch(e){
+    jsPsych.init({
+      timeline:[{
+        type:"html-button-response",
+        stimulus:"<h2>CSV konnte nicht geladen werden</h2>",
+        choices:["OK"]
+      }],
+      display_element:'jspsych-target'
+    });
+    return;
+  }
+
+  const meta = general[0];
+  const timeline = [];
+
+  /* ===============================
+   STARTSCREEN – CLICK TO HEAR
+=============================== */
+timeline.push({
+  type: "html-button-response",
+  stimulus: `
+    <div class="center" style="margin-top:32px;">
+
+      <div class="start-title">
+        ${meta.title || "SPEAK – Woche 12"}
+      </div>
+
+      <div class="start-subtitle">
+        Hör dir die Erklärung an. Klicke danach auf den Pfeil.
+      </div>
+
+      <img src="stimuli_C/${meta.explanation_image}"
+           id="explain-img"
+           class="target-img"
+           style="margin-bottom:20px;">
+
+      <div>
+        <button class="speaker-btn" id="play-explain">
+          <img src="stimuli_C/speaker.png">
+        </button>
+      </div>
+
+      <div style="margin-top:20px;">
+        <button class="next-btn hide" id="start-next">
+          <img src="stimuli_C/next.png">
+        </button>
+      </div>
+
+      <audio id="explain-audio"
+             src="stimuli_C/${meta.explanation_audio}">
+      </audio>
+    </div>
+  `,
+  choices: [],
+  on_load: function(){
+    const audio = document.getElementById("explain-audio");
+    const img   = document.getElementById("explain-img");
+    const play  = document.getElementById("play-explain");
+    const next  = document.getElementById("start-next");
+
+    function playAudio(){
+      img.classList.add("highlight-orange");
+      audio.currentTime = 0;
+      audio.play();
+    }
+
+    play.onclick = playAudio;
+    img.onclick  = playAudio;
+
+    audio.onended = function(){
+      img.classList.remove("highlight-orange");
+      next.classList.remove("hide");
+    };
+
+    next.onclick = () => jsPsych.finishTrial();
+  }
+});
+
+
+  /* ===============================
+     V5 TRIALS
+=============================== */
+  trials = jsPsych.randomization.shuffle(trials);
+
+  trials.forEach(t => {
+    timeline.push({
+      type: "html-button-response",
+      stimulus: `
+        <div class="center" style="margin-top:32px;">
+          <img src="stimuli_C/${t.target}"
+               id="target-img"
+               class="target-img"
+               style="margin-bottom:20px;">
+          <div>
+            <button class="speaker-btn" id="play-word">
+              <img src="stimuli_C/speaker.png">
+            </button>
+          </div>
+          <div style="margin-top:24px;">
+            <button class="next-btn hide" id="next-trial">
+              <img src="stimuli_C/next.png">
+            </button>
+          </div>
+          <audio id="word-audio" src="stimuli_C/${t.audio}"></audio>
+        </div>
+      `,
+      choices: [],
+      on_load: function(){
+        const audio = document.getElementById("word-audio");
+        const img   = document.getElementById("target-img");
+        const play  = document.getElementById("play-word");
+        const next  = document.getElementById("next-trial");
+
+        let listened = false;
+
+        function playAudio(){
+          img.classList.add("highlight-orange");
+          audio.currentTime = 0;
+          audio.play();
+        }
+
+        play.onclick = playAudio;
+        img.onclick  = playAudio;
+
+        audio.onended = function(){
+          img.classList.remove("highlight-orange");
+
+          if(!listened){
+            listened = true;
+
+            const overlay = document.createElement("div");
+            overlay.style =
+              "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
+              "background:rgba(255,255,255,0.9);" +
+              "display:flex;align-items:center;justify-content:center;z-index:9999;";
+            overlay.innerHTML = `
+              <img src="stimuli_C/stars.png" style="width:200px;">
+              <audio src="stimuli_C/stars_correct.mp3" autoplay></audio>
+            `;
+            document.body.appendChild(overlay);
+
+            setTimeout(() => {
+              document.body.removeChild(overlay);
+              next.classList.remove("hide");
+            }, 1500);
+          }
+        };
+
+        next.onclick = () => jsPsych.finishTrial();
+      }
+    });
+  });
+
+  /* ===============================
+     GOODBYE
+=============================== */
+  timeline.push({
+    type: "html-button-response",
+    stimulus: `
+      <div class="center">
+        <img src="stimuli_C/i_002.jpg" style="height:300px;">
+        <div style="margin-top:20px;">
+          <button class="next-btn">
+            <img src="stimuli_C/next.png">
+          </button>
+        </div>
+        <audio src="stimuli_C/${meta.goodbye_audio}" autoplay></audio>
+      </div>
+    `,
+    choices: []
+  });
+
+  /* ===============================
+     START jsPsych
+=============================== */
+  jsPsych.init({
+    timeline,
+    display_element:'jspsych-target'
+  });
+
+})();
+</script>
+</body>
+</html>

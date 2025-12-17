@@ -22,17 +22,22 @@
 
   <!-- PapaParse for CSV loading (async file parsing). -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ABeeZee&display=swap" rel="stylesheet">
 
   <style>
     /* General page layout (white background, standard font). */
     body{
-      background:#fff;
-      font-family:Arial, sans-serif;
-      margin:0;
-      padding:0;
-    }
+  background:#fff;
+  margin:0;
+  padding:0;
+}
     .center{ text-align:center; }
-
+.jspsych-display-element,
+.jspsych-display-element * {
+  font-family: "ABeeZee", sans-serif;
+}
     /* Generic next-button styling using an image. */
     .next-btn{
       background:none;
@@ -121,6 +126,13 @@
     /* Hide tile after it is selected once (article already used). */
     .tile.hidden{ display:none; }
 
+.tile.disabled{
+  pointer-events:none;
+  opacity:0.45;
+  filter:grayscale(60%);
+}
+
+
     /* Article text under tile image, colored by grammatical article. */
     .article-text{
       margin-top:4px;
@@ -150,6 +162,27 @@
       pointer-events:none; /* Prevents user interaction during animation. */
     }
     #stars-overlay img{ width:260px; }
+
+     body{
+    background:#fff;
+    margin:0;
+    padding:0;
+  }
+
+  /* Override jsPsych default font */
+  .jspsych-display-element,
+.jspsych-display-element * {
+  font-family: "ABeeZee", "Century Gothic", "Futura", "Trebuchet MS", sans-serif;
+}
+
+  .center{ text-align:center; }
+
+  .next-btn{
+    background:none;
+    border:none;
+    cursor:pointer;
+  }
+
   </style>
 </head>
 <body>
@@ -200,13 +233,13 @@
 
   /* Map article words to CSS classes defining text color. */
   function articleClass(txt){
-    if(!txt) return "";
-    const t = txt.trim().toLowerCase();
-    if(t === "die") return "a-die";
-    if(t === "das") return "a-das";
-    if(t === "der" || t === "den") return "a-der";
-    return "";
-  }
+  if(!txt) return "";
+  const t = txt.trim().toLowerCase();
+  if(t === "die") return "a-die";
+  if(t === "das") return "a-das";
+  if(t === "der") return "a-der";
+  return "";
+}
 
   /*
     Display stars animation and play success audio. Used after every correct
@@ -277,9 +310,9 @@
           </div>
 
           <div style="margin-top:22px;">
-            <button class="next-btn" id="welcome-next">
-              <img src="stimuli_AD/next.png" alt="Weiter">
-            </button>
+            <button class="next-btn" id="welcome-next" style="display:none;">
+  <img src="stimuli_AD/next.png" alt="Weiter">
+</button>
           </div>
         </div>
       `,
@@ -287,12 +320,16 @@
         /* Play explanation audio when speaker icon clicked. */
         const sp = document.getElementById("welcome-speaker");
         const btn = document.getElementById("welcome-next");
+let explanationPlayed = false;
 
         if(sp && general.explanation_audio){
-          sp.onclick = () => {
-            playAudio(STIM + general.explanation_audio);
-          };
-        }
+  sp.onclick = async () => {
+    if(explanationPlayed) return;
+    explanationPlayed = true;
+    await playAudio(STIM + general.explanation_audio);
+    if(btn) btn.style.display = "inline-block";
+  };
+}
 
         /* Continue to next screen when next-icon clicked. */
         if(btn){
@@ -415,7 +452,8 @@
               /* Display article + target image */
               if(b3){
                 b3.textContent = article;
-                b3.classList.add(articleClass(article));
+const cls = articleClass(article);
+if(cls) b3.classList.add(cls);
               }
               if(b4 && img3){
                 b4.innerHTML = `<img src="${img3}">`;
@@ -501,6 +539,7 @@
           const box4 = document.getElementById("t-b4");
           const playBtn = document.getElementById("t-play");
           const grid = document.getElementById("tiles");
+let questionPlayed = false;
 
           /* Audio references from CSV. */
           const questionAud = row.question ? STIM + row.question : "";
@@ -525,20 +564,28 @@
 
           /* Play full question sequence on speaker click. */
           if(playBtn){
-            playBtn.onclick = async () => {
-              if(questionAud){ await playAudio(questionAud); }
-              if(box1 && a1){
-                box1.classList.add("highlight");
-                await playAudio(a1);
-                box1.classList.remove("highlight");
-              }
-              if(box2 && a2){
-                box2.classList.add("highlight");
-                await playAudio(a2);
-                box2.classList.remove("highlight");
-              }
-            };
-          }
+  playBtn.onclick = async () => {
+
+    if(!questionPlayed){
+      questionPlayed = true;
+      document.querySelectorAll(".task-tile").forEach(t =>
+        t.classList.remove("disabled")
+      );
+    }
+
+    if(questionAud){ await playAudio(questionAud); }
+    if(box1 && a1){
+      box1.classList.add("highlight");
+      await playAudio(a1);
+      box1.classList.remove("highlight");
+    }
+    if(box2 && a2){
+      box2.classList.add("highlight");
+      await playAudio(a2);
+      box2.classList.remove("highlight");
+    }
+  };
+}
 
           /* Build tile array from columns image4..image9 + article/audio mapping. */
           const tileData = [];
@@ -556,8 +603,9 @@
             const aok  = "audio"+i;             // Fallback audio.
 
             /* Determine displayed article and audio file for sentence. */
-            const artBelow = row[abk] || "";
-            const art = row[artk] || artBelow;
+            const art = row[abk] || ""; // article_belowX (der/die/das) NOMINATIV
+            const artTop = row[artk] || ""; // articleX (den/die/das)
+
             const sentence = row[wk]
               ? STIM + row[wk]
               : row[aok]
@@ -571,6 +619,7 @@
               <img src="${img}">
               <div class="article-text ${articleClass(art)}">${art}</div>
             `;
+tile.classList.add("disabled");
 
             /* Store all tile data internally for dynamic removal + audio. */
             const record = {
@@ -583,8 +632,8 @@
 
             /* Tile click handler: shows article + image in sentence boxes. */
             tile.onclick = async () => {
-              const chosenArticle = (art || "").trim();
-              if(!chosenArticle) return;
+const chosenArticleTop = (artTop || "").trim(); // den/die/das
+const chosenArticle    = (art    || "").trim(); // der/die/das              if(!chosenArticle) return;
 
               /* Prevent using the same article twice. */
               if(usedArticles[chosenArticle]) return;
@@ -592,7 +641,7 @@
 
               /* Display chosen article and image. */
               if(box3){
-                box3.textContent = chosenArticle;
+                box3.textContent = chosenArticleTop;
                 box3.className = "sentence-box " + articleClass(chosenArticle);
               }
               if(box4){ box4.innerHTML = `<img src="${img}">`; }

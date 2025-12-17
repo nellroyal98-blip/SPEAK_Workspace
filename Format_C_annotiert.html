@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>SPEAK W12 V5</title>
+
+  <!--
+    jsPsych core library (version 6.3.1).
+    jsPsych is a framework for building browser-based behavioral experiments.
+    This script provides the experiment engine, timeline handling, and trial control.
+  -->
+  <script src="https://unpkg.com/jspsych@6.3.1/jspsych.js"></script>
+
+  <!--
+    jsPsych plugin: html-button-response.
+    Used to render arbitrary HTML stimuli with optional buttons and capture responses.
+    In this script, buttons are visually present but responses are handled manually.
+  -->
+  <script src="https://unpkg.com/jspsych@6.3.1/plugins/jspsych-html-button-response.js"></script>
+
+  <!--
+    Default jsPsych stylesheet.
+    Provides base styling for jsPsych display elements.
+  -->
+  <link href="https://unpkg.com/jspsych@6.3.1/css/jspsych.css" rel="stylesheet">
+
+  <!--
+    PapaParse library.
+    Used for client-side CSV parsing and downloading CSV files via HTTP.
+    This enables external configuration of the experiment via CSV files.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!--
+    Google Fonts preload and stylesheet.
+    ABeeZee is used as the global font for the experiment UI.
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=ABeeZee&display=swap" rel="stylesheet">
+
+  <style>
+    /*
+      Base page styling.
+      Removes default margins and sets a light background color.
+    */
+    body {
+      background:#fcfcfc;
+      margin:0;
+    }
+
+    /*
+      Forces jsPsych container and all descendants
+      to use the ABeeZee font consistently.
+    */
+    .jspsych-display-element,
+    .jspsych-display-element * {
+      font-family: "ABeeZee", sans-serif;
+    }
+
+    /* Utility class for centered text alignment */
+    .center { text-align:center; }
+
+    /*
+      Speaker button styling.
+      Buttons are rendered without default browser UI.
+    */
+    .speaker-btn {
+      background:none;
+      border:none;
+      cursor:pointer;
+    }
+
+    /* Size of the speaker icon */
+    .speaker-btn img { height:70px; }
+
+    /*
+      Next button styling.
+      Used to advance to the next trial.
+    */
+    .next-btn {
+      background:none;
+      border:none;
+      cursor:pointer;
+    }
+
+    /* Size of the next arrow icon */
+    .next-btn img { height:64px; }
+
+    /* Utility class to hide elements */
+    .hide { display:none; }
+
+    /*
+      Styling for the main stimulus image.
+      Includes rounded corners and a hover-ready cursor.
+    */
+    .target-img {
+      width:260px;
+      border-radius:20px;
+      transition: box-shadow 0.2s;
+      cursor:pointer;
+    }
+
+    /*
+      Highlight applied while audio is playing.
+      Used as visual feedback for active listening.
+    */
+    .highlight-orange {
+      box-shadow: 0 0 0 10px rgba(255,140,0,0.9);
+    }
+
+    /* Start screen title styling */
+    .start-title {
+      font-size: 2em;
+      margin-bottom: 10px;
+    }
+
+    /* Start screen subtitle styling */
+    .start-subtitle {
+      font-size: 1.1em;
+      margin-bottom: 20px;
+      color: #555;
+    }
+  </style>
+</head>
+
+<body>
+
+<!--
+  jsPsych renders all experiment content into this container.
+  The ID is referenced during jsPsych.init().
+-->
+<div id="jspsych-target"></div>
+
+<script>
+/* ===============================
+   CSV LOADER
+   =============================== */
+
+/*
+  Asynchronously loads and parses a CSV file from a given URL.
+
+  Parameters:
+  - url: string, path to the CSV file.
+
+  Returns:
+  - Promise resolving to an array of row objects (one object per CSV row).
+
+  Implementation details:
+  - Uses PapaParse with header:true to map columns to object keys.
+  - Filters out rows that are completely empty or whitespace-only.
+*/
+function loadCSV(url){
+  return new Promise((resolve,reject)=>{
+    Papa.parse(url,{
+      header:true,
+      download:true,
+      complete: r => resolve(
+        r.data.filter(row =>
+          Object.values(row).some(v => v && v.trim && v.trim() !== "")
+        )
+      ),
+      error: e => reject(e)
+    });
+  });
+}
+
+/* ===============================
+   MAIN
+   =============================== */
+
+/*
+  Immediately-invoked async function.
+  Encapsulates the entire experiment logic and avoids global namespace pollution.
+*/
+(async function main(){
+
+  /*
+    Variables to hold CSV-loaded configuration data.
+    - general: metadata and global settings
+    - trials: per-trial stimulus definitions
+  */
+  let general, trials;
+
+  /*
+    Attempt to load both CSV files.
+    If loading fails, show an error screen and abort execution.
+  */
+  try {
+    general = await loadCSV("data/K2_W12_V5_general.csv");
+    trials  = await loadCSV("data/K2_W12_V5_task.csv");
+  } catch(e){
+    jsPsych.init({
+      timeline:[{
+        type:"html-button-response",
+        stimulus:"<h2>CSV konnte nicht geladen werden</h2>",
+        choices:["OK"]
+      }],
+      display_element:'jspsych-target'
+    });
+    return;
+  }
+
+  /*
+    Extract the first row of the general CSV as metadata.
+    This assumes the file contains exactly one configuration row.
+  */
+  const meta = general[0];
+
+  /*
+    Timeline array that will sequentially collect all experiment trials.
+  */
+  const timeline = [];
+
+  /* ===============================
+     STARTSCREEN – CLICK TO HEAR
+     =============================== */
+
+  /*
+    Introductory screen.
+    Participants must listen to an explanation audio before continuing.
+  */
+  timeline.push({
+    type: "html-button-response",
+
+    /*
+      HTML stimulus for the start screen.
+      Includes title, subtitle, image, audio controls, and hidden next button.
+    */
+    stimulus: `
+      <div class="center" style="margin-top:32px;">
+
+        <div class="start-title">
+          ${meta.title || "SPEAK – Woche 12"}
+        </div>
+
+        <div class="start-subtitle">
+          Hör dir die Erklärung an. Klicke danach auf den Pfeil.
+        </div>
+
+        <img src="stimuli_C/${meta.explanation_image}"
+             id="explain-img"
+             class="target-img"
+             style="margin-bottom:20px;">
+
+        <div>
+          <button class="speaker-btn" id="play-explain">
+            <img src="stimuli_C/speaker.png">
+          </button>
+        </div>
+
+        <div style="margin-top:20px;">
+          <button class="next-btn hide" id="start-next">
+            <img src="stimuli_C/next.png">
+          </button>
+        </div>
+
+        <audio id="explain-audio"
+               src="stimuli_C/${meta.explanation_audio}">
+        </audio>
+      </div>
+    `,
+    choices: [],
+
+    /*
+      on_load runs after the stimulus is rendered.
+      Used here to attach DOM event handlers.
+    */
+    on_load: function(){
+      const audio = document.getElementById("explain-audio");
+      const img   = document.getElementById("explain-img");
+      const play  = document.getElementById("play-explain");
+      const next  = document.getElementById("start-next");
+
+      /*
+        Plays the explanation audio and visually highlights the image.
+      */
+      function playAudio(){
+        img.classList.add("highlight-orange");
+        audio.currentTime = 0;
+        audio.play();
+      }
+
+      /*
+        Allow both the speaker button and the image itself
+        to trigger audio playback.
+      */
+      play.onclick = playAudio;
+      img.onclick  = playAudio;
+
+      /*
+        When the audio finishes:
+        - remove highlight
+        - reveal the next button
+      */
+      audio.onended = function(){
+        img.classList.remove("highlight-orange");
+        next.classList.remove("hide");
+      };
+
+      /*
+        Advances the jsPsych timeline manually.
+      */
+      next.onclick = () => jsPsych.finishTrial();
+    }
+  });
+
+  /* ===============================
+     V5 TRIALS
+     =============================== */
+
+  /*
+    Randomize trial order to avoid systematic sequence effects.
+  */
+  trials = jsPsych.randomization.shuffle(trials);
+
+  /*
+    Create one jsPsych trial per CSV row.
+  */
+  trials.forEach(t => {
+    timeline.push({
+      type: "html-button-response",
+
+      /*
+        HTML stimulus for a single trial.
+        Displays target image, speaker button, hidden next button, and audio.
+      */
+      stimulus: `
+        <div class="center" style="margin-top:32px;">
+          <img src="stimuli_C/${t.target}"
+               id="target-img"
+               class="target-img"
+               style="margin-bottom:20px;">
+          <div>
+            <button class="speaker-btn" id="play-word">
+              <img src="stimuli_C/speaker.png">
+            </button>
+          </div>
+          <div style="margin-top:24px;">
+            <button class="next-btn hide" id="next-trial">
+              <img src="stimuli_C/next.png">
+            </button>
+          </div>
+          <audio id="word-audio" src="stimuli_C/${t.audio}"></audio>
+        </div>
+      `,
+      choices: [],
+
+      /*
+        Attach logic for audio playback, feedback, and trial progression.
+      */
+      on_load: function(){
+        const audio = document.getElementById("word-audio");
+        const img   = document.getElementById("target-img");
+        const play  = document.getElementById("play-word");
+        const next  = document.getElementById("next-trial");
+
+        /*
+          Ensures that reward feedback is shown only once,
+          even if the audio is replayed.
+        */
+        let listened = false;
+
+        /*
+          Plays the word audio and highlights the image.
+        */
+        function playAudio(){
+          img.classList.add("highlight-orange");
+          audio.currentTime = 0;
+          audio.play();
+        }
+
+        play.onclick = playAudio;
+        img.onclick  = playAudio;
+
+        /*
+          When audio finishes:
+          - remove highlight
+          - show reward overlay (once)
+          - reveal next button after delay
+        */
+        audio.onended = function(){
+          img.classList.remove("highlight-orange");
+
+          if(!listened){
+            listened = true;
+
+            /*
+              Fullscreen overlay providing positive feedback.
+              Blocks interaction during reward animation.
+            */
+            const overlay = document.createElement("div");
+            overlay.style =
+              "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
+              "background:rgba(255,255,255,0.9);" +
+              "display:flex;align-items:center;justify-content:center;z-index:9999;";
+            overlay.innerHTML = `
+              <img src="stimuli_C/stars.png" style="width:200px;">
+              <audio src="stimuli_C/stars_correct.mp3" autoplay></audio>
+            `;
+            document.body.appendChild(overlay);
+
+            /*
+              Remove overlay after 1.5 seconds and allow progression.
+            */
+            setTimeout(() => {
+              document.body.removeChild(overlay);
+              next.classList.remove("hide");
+            }, 1500);
+          }
+        };
+
+        /*
+          Ends the current trial and proceeds in the timeline.
+        */
+        next.onclick = () => jsPsych.finishTrial();
+      }
+    });
+  });
+
+  /* ===============================
+     GOODBYE
+     =============================== */
+
+  /*
+    Final screen shown at the end of the experiment.
+    Plays a goodbye audio automatically.
+  */
+  timeline.push({
+    type: "html-button-response",
+    stimulus: `
+      <div class="center">
+        <img src="stimuli_C/i_002.jpg" style="height:300px;">
+        <div style="margin-top:20px;">
+          <button class="next-btn">
+            <img src="stimuli_C/next.png">
+          </button>
+        </div>
+        <audio src="stimuli_C/${meta.goodbye_audio}" autoplay></audio>
+      </div>
+    `,
+    choices: []
+  });
+
+  /* ===============================
+     START jsPsych
+     =============================== */
+
+  /*
+    Initializes jsPsych with the constructed timeline
+    and binds rendering to the specified DOM element.
+  */
+  jsPsych.init({
+    timeline,
+    display_element:'jspsych-target'
+  });
+
+})();
+</script>
+</body>
+</html>
