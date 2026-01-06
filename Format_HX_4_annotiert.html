@@ -1,0 +1,1565 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <!--
+    ============================================================
+    SPEAK W12 G1 (HX4) — jsPsych HTML Experiment
+    ============================================================
+
+    This file is a self-contained jsPsych (v6.3.1) experiment runner.
+    It loads trial definitions from two CSV files, builds a timeline,
+    and runs a “story + question” flow with audio prompts and feedback.
+
+    High-level structure:
+      1) Load CSV metadata (general) + item rows (task)
+      2) Build a jsPsych timeline:
+         - Intro screen (hx4_intro)
+         - For each CSV row:
+            - Story-only trial (if no question)
+            - Or Question trial with two audio options, shuffle on first mistake
+         - Goodbye screen
+      3) Start jsPsych
+
+    Key behaviors:
+      - Audio “unlock” helper to satisfy mobile autoplay restrictions
+      - “Continue” arrow is enabled only after:
+          - question audio has been played at least once
+          - left option audio has been played at least once
+          - right option audio has been played at least once
+          - and no audio is currently playing
+      - First wrong attempt: play follow-up audio, show shuffle animation + sound,
+        swap left/right mapping, force re-listen (question + both options)
+      - Second wrong attempt: play ai_083, reveal correct option in orange,
+        optionally play full correct sentence audio
+      - Correct choice: show stars overlay and play twinkle sound
+  -->
+
+  <meta charset="utf-8">
+  <title>SPEAK W12 G1</title>
+
+  <!-- jsPsych core and plugin -->
+  <script src="https://unpkg.com/jspsych@6.3.1/jspsych.js"></script>
+  <script src="https://unpkg.com/jspsych@6.3.1/plugins/jspsych-html-button-response.js"></script>
+  <link href="https://unpkg.com/jspsych@6.3.1/css/jspsych.css" rel="stylesheet">
+
+  <!-- PapaParse for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Google font used throughout the experiment -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=ABeeZee&display=swap" rel="stylesheet">
+
+  <style>
+    /*
+      ============================================================
+      Global Layout + Typography
+      ============================================================
+
+      jsPsych injects its content into a “display element”.
+      We set a consistent font and a neutral background.
+    */
+    body { background:#fcfcfc; margin:0; }
+    .jspsych-display-element,
+    .jspsych-display-element * { font-family:"ABeeZee", sans-serif; }
+
+    .center { text-align:center; }
+
+    /*
+      ============================================================
+      Buttons
+      ============================================================
+
+      Speaker button and next button are visually “just the image”.
+      The actual click target is the <button>.
+    */
+    .speaker-btn,
+    .next-btn {
+      background:none;
+      border:none;
+      cursor:pointer;
+      padding:0;
+    }
+    .speaker-btn img { height:70px; }
+    .next-btn img { height:70px; }
+
+    /* Utility class to hide elements until they become available. */
+    .hide { display:none; }
+
+    /*
+      ============================================================
+      Main Stimulus Image
+      ============================================================
+
+      The main image (story/question image) is large, responsive,
+      and has a subtle border-like shadow.
+    */
+    .main-img {
+      width:700px;
+      max-width:80vw;
+      border-radius:22px;
+      box-shadow:0 0 0 6px rgba(200,200,200,0.5);
+      cursor:pointer;
+      user-select:none;
+    }
+
+    /* Orange highlight used while question/story audio is playing. */
+    .highlight-orange {
+      box-shadow:0 0 0 10px rgba(255,140,0,0.9);
+      border-radius:24px;
+    }
+
+    /*
+      ============================================================
+      Top Bar (speaker + task label)
+      ============================================================
+
+      The top bar gives consistent spacing and positions the task label.
+    */
+    .topbar-wrap {
+      width:920px;
+      max-width:95vw;
+      margin:18px auto 0 auto;
+      position:relative;
+    }
+
+    .tasklabel {
+      position:absolute;
+      right:18px;
+      top:18px;
+      font-size:18px;
+      color:#111;
+    }
+
+    /*
+      ============================================================
+      Option Row (Left/Right Answer Buttons) + Center Panel
+      ============================================================
+
+      Two clickable “speaker boxes” left and right.
+      A center panel holds the continue arrow and the shuffle icon.
+    */
+    .option-row {
+      width:920px;
+      max-width:95vw;
+      margin:18px auto 0 auto;
+      position:relative;
+      height:220px;
+    }
+
+    .opt {
+      position:absolute;
+      top:0;
+      width:260px;
+      height:220px;
+      cursor:pointer;
+      user-select:none;
+    }
+    /* When disabled, clicks are blocked. */
+    .opt.disabled { pointer-events:none; opacity:0.65; cursor:default; }
+
+    .opt.left { left:0; }
+    .opt.right { right:0; }
+
+    /* Inner wrapper to layer icon + colored highlight box. */
+    .opt .opt-inner {
+      position:relative;
+      width:260px;
+      height:170px;
+    }
+
+    /* The speaker icon on top of the highlight box. */
+    .opt img.opt-icon {
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform:translate(-50%,-50%);
+      height:95px;
+      z-index:3;
+      pointer-events:none;
+    }
+
+    /*
+      Highlight boxes are stacked images; only one is shown at a time.
+      States: gray (default), yellow (selected), green (correct),
+              red (wrong), orange (revealed correct after 2nd mistake).
+    */
+    .opt img.box-gray,
+    .opt img.box-yellow,
+    .opt img.box-green,
+    .opt img.box-red,
+    .opt img.box-orange {
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform:translate(-50%,-50%);
+      height:170px;
+      z-index:2;
+      pointer-events:none;
+      display:none;
+    }
+
+    /* CSS-driven state machine for the highlight box visibility. */
+    .opt.show-gray img.box-gray { display:block; }
+    .opt.show-yellow img.box-yellow { display:block; }
+    .opt.show-green img.box-green { display:block; }
+    .opt.show-red img.box-red { display:block; }
+    .opt.show-orange img.box-orange { display:block; }
+
+    /*
+      Center panel is a fixed-size area between left/right options.
+      It contains:
+        - continue arrow (enabled/disabled image)
+        - shuffle icon (shown briefly during shuffle animation)
+        - shuffle audio element
+    */
+    .mid-panel {
+      position:absolute;
+      left:50%;
+      top:0;
+      transform:translateX(-50%);
+      width:360px;
+      height:170px;
+      border:0;
+      background:transparent;
+      box-sizing:border-box;
+    }
+
+    /*
+      ============================================================
+      Stars overlay
+      ============================================================
+
+      Positioned over the main picture; becomes visible upon correct answer.
+      z-index is large to ensure it appears above the main image.
+    */
+    .stars-img {
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform:translate(-50%,-50%);
+      width:420px;
+      pointer-events:none;
+      display:none;
+      z-index:50;
+      user-select:none;
+    }
+    .stars-img.show { display:block; }
+
+    /*
+      ============================================================
+      Reshuffle image (legacy / unused in current UI)
+      ============================================================
+
+      This class exists but the current implementation uses #shuffle-icon
+      inside the center panel. The helper runReshuffle() is also present,
+      but the code uses runShuffleInBox() instead.
+    */
+    .reshuffle-img {
+      position:absolute;
+      left:50%;
+      bottom:-18px;
+      transform:translateX(-50%) rotate(0deg);
+      width:70px;
+      height:70px;
+      pointer-events:none;
+      display:none;
+      z-index:7;
+      user-select:none;
+    }
+
+    /*
+      ============================================================
+      Text Row (Left/Right Written Options)
+      ============================================================
+
+      Shows the written sentence options under the two answer buttons.
+      Some German determiners get highlighted in blue via .hl spans.
+    */
+    .text-row {
+      width:920px;
+      max-width:95vw;
+      margin:8px auto 0 auto;
+      display:flex;
+      justify-content:space-between;
+      font-size:40px;
+      color:#000;
+    }
+    .text-col {
+      width:320px;
+      text-align:center;
+      line-height:1.05;
+    }
+    .hl { color:#1e62ff; font-weight:700; }
+
+    .next-row { margin-top:18px; }
+  </style>
+</head>
+
+<body>
+  <!-- jsPsych will render into this target element. -->
+  <div id="jspsych-target"></div>
+
+<script>
+/*
+  ============================================================
+  CSV LOADING (with encoding fallback)
+  ============================================================
+
+  loadCSV(url):
+    - Fetches CSV as raw bytes (ArrayBuffer) to control decoding.
+    - Decodes as UTF-8 first.
+    - If decoding produced replacement chars ("�"), retry with Windows-1252.
+    - Parses CSV text with PapaParse (header row → objects).
+    - Filters out fully-empty rows.
+*/
+async function loadCSV(url){
+  const res = await fetch(url, { cache: "no-store" });
+  const buf = await res.arrayBuffer();
+
+  // Try UTF-8 first, fallback to Windows-1252 if needed
+  let text = new TextDecoder("utf-8", { fatal: false }).decode(buf);
+
+  // Heuristic: if replacement char appears, retry as windows-1252
+  if(text.includes("�")){
+    text = new TextDecoder("windows-1252", { fatal: false }).decode(buf);
+  }
+
+  return new Promise((resolve, reject) => {
+    Papa.parse(text, {
+      header: true,
+      skipEmptyLines: true,
+      complete: r => {
+        // Keep only rows that have at least one non-empty cell.
+        const rows = (r.data || []).filter(row =>
+          Object.values(row).some(v => v && v.trim && v.trim() !== "")
+        );
+        resolve(rows);
+      },
+      error: err => reject(err)
+    });
+  });
+}
+
+/*
+  ============================================================
+  AUDIO HELPERS
+  ============================================================
+
+  playAudioSafe(audioEl):
+    - Resets playback to time 0 if possible.
+    - Calls .play() and returns a Promise<boolean>
+      true  → playback started successfully
+      false → playback was blocked or failed (e.g., autoplay restrictions)
+
+  This wrapper prevents unhandled promise rejections on mobile browsers.
+*/
+function playAudioSafe(audioEl){
+  if(!audioEl) return Promise.resolve(false);
+  try { audioEl.currentTime = 0; } catch(e){}
+  const p = audioEl.play();
+  if(p && typeof p.catch === "function"){
+    return p.then(()=>true).catch(()=>false);
+  }
+  return Promise.resolve(true);
+}
+
+/*
+  unlockAudioOnce():
+    Many mobile browsers require a user gesture before audio can play.
+    This creates a silent Audio element and attempts playback once.
+    After the first call, subsequent calls do nothing.
+
+  Note:
+    - This does not guarantee all later audio will play, but it improves
+      reliability once a user has interacted.
+*/
+let __audioUnlocked = false;
+function unlockAudioOnce(){
+  if(__audioUnlocked) return;
+  __audioUnlocked = true;
+  try{
+    const a = new Audio();
+    a.src = "data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAAAA==";
+    a.volume = 0;
+    a.play().catch(()=>{});
+  }catch(e){}
+}
+
+/*
+  ============================================================
+  GENERAL UTILITIES
+  ============================================================
+
+  norm(v):
+    - Converts undefined/null to ""
+    - Otherwise stringifies and trims whitespace
+    - Used to safely read CSV fields without crashing
+*/
+function norm(v){
+  if(v === undefined || v === null) return "";
+  return String(v).trim();
+}
+
+/*
+  runReshuffle(el):
+    - Legacy helper that rotates an element in steps and then hides it.
+    - Present for compatibility; not currently used by the main flow
+      (runShuffleInBox() is used instead).
+*/
+async function runReshuffle(el){
+  if(!el) return;
+  el.style.display = "block";
+  const steps = [40,80,120,160,200,240,280,320,0];
+  const stepMs = 50;
+  let i = 0;
+  return new Promise(resolve => {
+    const t = setInterval(() => {
+      el.style.transform = "translateX(-50%) rotate(" + steps[i] + "deg)";
+      i += 1;
+      if(i >= steps.length){
+        clearInterval(t);
+        el.style.display = "none";
+        el.style.transform = "translateX(-50%) rotate(0deg)";
+        resolve();
+      }
+    }, stepMs);
+  });
+}
+
+/*
+  formatHighlightSentence(text):
+    - Splits a sentence into words.
+    - If a word (punctuation removed) is one of: dem/der/den/die/das,
+      wrap it in a <span class="hl">…</span> to highlight in blue.
+    - Returns HTML string.
+
+  Important:
+    - This is "safe enough" if CSV text is controlled (not arbitrary HTML).
+    - If CSV could contain "<script>" etc., you would need escaping.
+*/
+function formatHighlightSentence(text){
+  const t = norm(text);
+  if(!t) return "";
+  const parts = t.split(" ");
+  const out = parts.map(w => {
+    const base = w.replace(/[.,!?;:]/g, "");
+    if(base === "dem" || base === "der" || base === "den" || base === "die" || base === "das"){
+      return "<span class='hl'>" + w + "</span>";
+    }
+    return w;
+  });
+  return out.join(" ");
+}
+
+/*
+  ============================================================
+  MAIN EXPERIMENT BOOTSTRAP (IIFE)
+  ============================================================
+
+  This async IIFE builds the timeline and starts jsPsych.
+  Using an IIFE keeps variables scoped to this file and avoids globals.
+*/
+(async function main(){
+  let general, rows;
+
+  /*
+    ------------------------------------------------------------
+    Load CSVs
+    ------------------------------------------------------------
+
+    - general CSV holds meta/config values (week, task label, welcome image, etc.)
+    - task CSV holds per-trial stimuli (audio paths, texts, images, follow-up logic)
+  */
+  try{
+    general = await loadCSV("stimuli_HX4/K2_W12_G1_general.csv");
+    rows = await loadCSV("stimuli_HX4/K2_W12_G1_task.csv");
+  } catch(e){
+    // If CSV loading fails, show a simple jsPsych screen with the error.
+    jsPsych.init({
+      timeline:[{
+        type:"html-button-response",
+        stimulus:"<h2>CSV konnte nicht geladen werden</h2><p>" + String(e) + "</p>",
+        choices:["OK"]
+      }],
+      display_element:"jspsych-target"
+    });
+    return;
+  }
+
+  /*
+    ------------------------------------------------------------
+    Meta + asset setup
+    ------------------------------------------------------------
+  */
+  const meta = general[0] || {};
+  const block_type = norm(meta.block_type) || "W12_G1";
+  const week = norm(meta.week) || "12";
+  const task_type = norm(meta.task_type) || "G1";
+
+  // Base folder for this experiment’s assets.
+  const BASE = "stimuli_HX4/";
+
+  // Choose welcome image; if CSV says "screenshot" or empty, use default.
+  const introImgFile = (norm(meta.welcome_image) === "screenshot" || norm(meta.welcome_image) === "")
+    ? "Week12_G1.png"
+    : norm(meta.welcome_image);
+
+  // Explanation audio path for intro.
+  const explanation_audio = BASE + norm(meta.explanation_audio);
+
+  /*
+    All image/audio filenames are centralized here.
+    This makes it easy to rename / swap resources without touching logic.
+  */
+  const ASSET = {
+    speaker: BASE + "speaker.png",
+    speakerPlaying: BASE + "speaker_playing.png",
+    next: BASE + "next.png",
+
+    graySpeaker: BASE + "gray_speaker.png",
+
+    boxGray: BASE + "highlight_box_gray.png",
+    boxYellow: BASE + "highlight_box_yellow.png",
+    boxGreen: BASE + "highlight_box_green.png",
+    boxRed: BASE + "highlight_box_red.png",
+    boxOrange: BASE + "highlight_box_orange.png",
+
+    reshuffle: BASE + "reshuffle.png",
+
+    starsPng: BASE + "stars.png",
+    twinkle: BASE + "stars_correct.mp3",
+
+    ai083: BASE + "ai_083.mp3",
+
+    byeImg: BASE + "i_002.jpg"
+  };
+
+  /*
+    ============================================================
+    INTRO TRIAL (hx4_intro)
+    ============================================================
+
+    - Shows a logo, welcome line, a short instruction sentence
+    - Shows a speaker button that plays explanation audio
+    - Also allows clicking the example image to start audio
+    - After audio ends, reveals the “next” button
+    - No autoplay: playback starts only on user click
+  */
+  const hx4_intro = {
+    type: "html-button-response",
+    stimulus: `
+      <img
+        src="${BASE}SPEAK_transparenter_HG.png"
+        style="height:150px; margin:18px auto 10px auto; display:block;"
+        alt="Logo"
+      >
+
+      <h2 style="text-align:center; margin:0 0 10px 0;">
+        Willkommen zur Übung in Woche ${week}
+      </h2>
+
+      <div style="text-align:center; font-size:1.05em; margin:0 0 14px 0;">
+        Bitte höre dir die Aufgabenstellung an.
+      </div>
+
+      <div style="display:flex; justify-content:center; margin:0 0 10px 0;">
+        <button class="speaker-btn" id="intro-play" aria-label="Audio abspielen">
+          <img id="intro-speaker-img" src="${ASSET.speaker}" alt="Play">
+        </button>
+      </div>
+
+      <div style="display:flex; justify-content:center; margin:0 0 10px 0;">
+        <img
+          id="intro-example-img"
+          src="${BASE + introImgFile}"
+          style="height:400px; border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,0.6); cursor:pointer;"
+          alt="Beispiel"
+        >
+      </div>
+
+      <audio id="instr-audio" src="${explanation_audio}"></audio>
+
+      <div style="text-align:center; margin-top:14px;">
+        <button class="next-btn hide" id="instr-next-btn">
+          <img src="${ASSET.next}" alt="Weiter">
+        </button>
+      </div>
+    `,
+    choices: [],
+    on_load: function(){
+      // DOM references inside this trial
+      const audio = document.getElementById("instr-audio");
+      const nextBtn = document.getElementById("instr-next-btn");
+      const playBtn = document.getElementById("intro-play");
+      const exampleImg = document.getElementById("intro-example-img");
+      const speakerImg = document.getElementById("intro-speaker-img");
+
+      // Prevent double-triggering while audio is playing
+      let isPlaying = false;
+
+      async function startIntroAudio(){
+        if(isPlaying) return;
+        isPlaying = true;
+
+        unlockAudioOnce();
+        speakerImg.src = ASSET.speakerPlaying;
+
+        const ok = await playAudioSafe(audio);
+        if(!ok){
+          // If playback failed (autoplay restrictions), revert icon + unlock state
+          isPlaying = false;
+          speakerImg.src = ASSET.speaker;
+        }
+      }
+
+      // Start audio by clicking either the speaker button or the example image
+      playBtn.onclick = startIntroAudio;
+      exampleImg.onclick = startIntroAudio;
+
+      // When intro audio ends: restore icon and reveal the next button
+      audio.onended = function(){
+        isPlaying = false;
+        speakerImg.src = ASSET.speaker;
+        nextBtn.classList.remove("hide");
+      };
+
+      // Continue into the main task timeline
+      nextBtn.onclick = function(){
+        jsPsych.finishTrial({ block_type, week, task_type, screen: "intro" });
+      };
+    }
+  };
+
+  /*
+    ============================================================
+    TIMELINE CONSTRUCTION
+    ============================================================
+
+    timeline is a standard jsPsych timeline array.
+    We push:
+      - hx4_intro (custom intro)
+      - then one trial per row (story-only or question)
+      - then a goodbye screen
+  */
+  const timeline = [];
+  timeline.push(hx4_intro);
+
+  /*
+    ============================================================
+    PER-ROW TRIALS
+    ============================================================
+
+    Each row can be either:
+      A) A story screen only (no multiple-choice question)
+      B) A question screen with two options and feedback logic
+
+    The decision is based on the presence of target_audio and distractor_audio.
+  */
+  rows.forEach((r, rowIndex) => {
+    // Read all relevant columns from CSV row
+    const story_audio = norm(r.story_audio);
+    const audio_last_sentence = norm(r.audio_last_sentence);
+    const target_audio = norm(r.target_audio);
+    const target_writing = norm(r.target_writing);
+    const distractor_audio = norm(r.distractor_audio);
+    const distractor_writing = norm(r.distractor_writing);
+    const full_and_correct_sentence = norm(r.full_and_correct_sentence);
+    const follow_up_if_not_correct = norm(r.follow_up_if_not_correct);
+    const show_on_screen = norm(r.show_on_screen);
+
+    // True if row contains a question with two options
+    const hasQuestion = (target_audio && distractor_audio);
+
+    /*
+      ------------------------------------------------------------
+      A) STORY-ONLY TRIAL
+      ------------------------------------------------------------
+
+      - Plays story audio
+      - Highlights the image while playing
+      - Shows next button after audio ends
+      - Autoplays story audio by calling start() on load
+    */
+    if(!hasQuestion){
+      timeline.push({
+        type: "html-button-response",
+        stimulus: `
+          <div class="center" style="margin-top:26px;">
+            <div class="topbar-wrap">
+              <button class="speaker-btn" id="play-story" aria-label="Audio abspielen">
+                <img id="speaker-story-img" src="${ASSET.speaker}" alt="Play">
+              </button>
+              <div class="tasklabel">${task_type}</div>
+            </div>
+
+            <img src="${BASE + show_on_screen}" id="story-img" class="main-img" style="margin-top:18px;" alt="Bild">
+
+            <div class="next-row">
+              <button class="next-btn hide" id="story-next">
+                <img src="${ASSET.next}" alt="Weiter">
+              </button>
+            </div>
+
+            <audio id="story-audio" src="${BASE + story_audio}"></audio>
+          </div>
+        `,
+        choices: [],
+        data: {
+          block_type, week, task_type,
+          row_index: rowIndex,
+          screen: "story",
+          story_audio: story_audio,
+          show_on_screen: show_on_screen
+        },
+        on_load: function(){
+          // DOM elements for this story trial
+          const audio = document.getElementById("story-audio");
+          const img = document.getElementById("story-img");
+          const play = document.getElementById("play-story");
+          const next = document.getElementById("story-next");
+          const speakerIcon = document.getElementById("speaker-story-img");
+
+          let isPlaying = false;
+
+          // Update UI to show “playing” state
+          function setPlayingUI(flag){
+            if(flag){
+              img.classList.add("highlight-orange");
+              speakerIcon.src = ASSET.speakerPlaying;
+            } else {
+              img.classList.remove("highlight-orange");
+              speakerIcon.src = ASSET.speaker;
+            }
+          }
+
+          // Starts audio playback; prevents double-start
+          async function start(){
+            if(isPlaying) return;
+            isPlaying = true;
+            setPlayingUI(true);
+            const ok = await playAudioSafe(audio);
+            if(!ok){
+              isPlaying = false;
+              setPlayingUI(false);
+            }
+          }
+
+          // When audio ends, show the next button
+          audio.onended = function(){
+            isPlaying = false;
+            setPlayingUI(false);
+            next.classList.remove("hide");
+          };
+
+          // Allow replay by clicking speaker button or image
+          play.onclick = function(){ unlockAudioOnce(); start(); };
+          img.onclick = function(){ unlockAudioOnce(); start(); };
+
+          // Attempt to unlock and autoplay the story audio on load
+          unlockAudioOnce();
+          start();
+
+          // Finish trial when next clicked
+          next.onclick = () => jsPsych.finishTrial();
+        }
+      });
+
+      // “return” exits this forEach callback for this row.
+      return;
+    }
+
+    /*
+      ------------------------------------------------------------
+      B) QUESTION TRIAL (two options + feedback)
+      ------------------------------------------------------------
+
+      Visual layout:
+        - Top bar with speaker button (plays question prompt audio_last_sentence)
+        - Main image with stars overlay (hidden until correct)
+        - Left/right option boxes: click to play the option audio
+        - Written text under each option (target_writing / distractor_writing)
+        - Continue arrow in center: submit/evaluate once enabled
+
+      Logic summary:
+        - You MUST listen to: question + left option + right option at least once
+        - Continue becomes enabled only after those listens and when not playing
+        - First wrong: red box + follow-up audio (optional), shuffle animation/sound,
+          swap mapping of which side is target/distractor, force re-listen
+        - Second wrong: play ai_083, reveal correct in orange,
+          optionally play full correct sentence audio
+        - Correct: green box + stars + twinkle sound, then continue ends trial
+    */
+    timeline.push({
+      type: "html-button-response",
+      stimulus: `
+        <div class="center" style="margin-top:20px;">
+          <div class="topbar-wrap">
+            <button class="speaker-btn" id="play-question" aria-label="Audio abspielen">
+              <img id="speaker-q-img" src="${ASSET.speaker}" alt="Play">
+            </button>
+            <div class="tasklabel">${task_type}</div>
+          </div>
+
+          <div id="main-wrap" style="position:relative; display:inline-block; margin-top:18px;">
+            <img src="${BASE + show_on_screen}" id="q-img" class="main-img" alt="Bild">
+            <img id="stars" class="stars-img" src="stimuli_HX4/stars.png" alt="Sterne">
+          </div>
+
+          <div class="option-row" id="option-row">
+            <div class="opt left show-gray disabled" id="opt-left">
+              <div class="opt-inner">
+                <img class="opt-icon" src="${ASSET.graySpeaker}" alt="Option">
+                <img class="box-gray" src="${ASSET.boxGray}" alt="">
+                <img class="box-yellow" src="${ASSET.boxYellow}" alt="">
+                <img class="box-green" src="${ASSET.boxGreen}" alt="">
+                <img class="box-red" src="${ASSET.boxRed}" alt="">
+                <img class="box-orange" src="${ASSET.boxOrange}" alt="">
+              </div>
+            </div>
+
+            <div class="mid-panel" style="position:relative;">
+
+              <!-- Continue arrow: switches between empty vs active icon -->
+              <img
+                id="continue-arrow"
+                src="stimuli_HX4/next_small_empty.png"
+                alt="Weiter"
+                style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); height:170px; user-select:none; cursor:pointer;"
+              >
+
+              <!-- Shuffle icon: shown briefly during the shuffle animation -->
+              <img
+                id="shuffle-icon"
+                src="stimuli_HX4/reshuffle.png"
+                alt="Shuffle"
+                style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) rotate(0deg); height:170px; user-select:none; pointer-events:none; display:none;"
+              >
+
+              <audio id="shuffle-audio" src="stimuli_HX4/shuffle.wav"></audio>
+            </div>
+
+            <div class="opt right show-gray disabled" id="opt-right">
+              <div class="opt-inner">
+                <img class="opt-icon" src="${ASSET.graySpeaker}" alt="Option">
+                <img class="box-gray" src="${ASSET.boxGray}" alt="">
+                <img class="box-yellow" src="${ASSET.boxYellow}" alt="">
+                <img class="box-green" src="${ASSET.boxGreen}" alt="">
+                <img class="box-red" src="${ASSET.boxRed}" alt="">
+                <img class="box-orange" src="${ASSET.boxOrange}" alt="">
+              </div>
+            </div>
+          </div>
+
+          <div class="text-row">
+            <div class="text-col" id="txt-left"></div>
+            <div class="text-col" id="txt-right"></div>
+          </div>
+
+          <!-- The “question prompt” audio (usually the last sentence / question) -->
+          <audio id="q-audio" src="${BASE + audio_last_sentence}"></audio>
+        </div>
+      `,
+      choices: [],
+      data: {
+        block_type, week, task_type,
+        row_index: rowIndex,
+        screen: "question",
+        story_audio: story_audio,
+        audio_last_sentence: audio_last_sentence,
+        target_audio: target_audio,
+        target_writing: target_writing,
+        distractor_audio: distractor_audio,
+        distractor_writing: distractor_writing,
+        full_and_correct_sentence: full_and_correct_sentence,
+        follow_up_if_not_correct: follow_up_if_not_correct,
+        show_on_screen: show_on_screen
+      },
+      on_load: function(){
+        /*
+          ----------------------------------------------------------
+          DOM element references for this trial
+          ----------------------------------------------------------
+        */
+        const topPlayBtn = document.getElementById("play-question");
+        const topSpeakerIcon = document.getElementById("speaker-q-img");
+        const img = document.getElementById("q-img");
+
+        const optL = document.getElementById("opt-left");
+        const optR = document.getElementById("opt-right");
+
+        const txtLeft = document.getElementById("txt-left");
+        const txtRight = document.getElementById("txt-right");
+
+        const stars = document.getElementById("stars");
+        const shuffleIcon = document.getElementById("shuffle-icon");
+        const shuffleAudioEl = document.getElementById("shuffle-audio");
+
+        const cont = document.getElementById("continue-arrow");
+        const qAudio = document.getElementById("q-audio");
+
+        /*
+          ----------------------------------------------------------
+          Preload / create Audio instances used for feedback
+          ----------------------------------------------------------
+
+          - sndTwinkle: correct-answer sound
+          - sndAi083: “second mistake” sound (often a corrective prompt)
+          - sndFollow: optional follow-up audio after first mistake
+          - sndFull: optional “full and correct sentence” after reveal
+        */
+        const sndTwinkle = new Audio(ASSET.twinkle);
+        const sndAi083 = new Audio(ASSET.ai083);
+
+        const sndFollow = follow_up_if_not_correct ? new Audio(BASE + follow_up_if_not_correct) : null;
+        const sndFull = full_and_correct_sentence ? new Audio(BASE + full_and_correct_sentence) : null;
+
+        /*
+          ----------------------------------------------------------
+          State flags for gating and selection
+          ----------------------------------------------------------
+
+          isPlaying:
+            - True while any audio is currently playing (question/options/feedback)
+
+          heardQuestionOnce / heardLeftOnce / heardRightOnce:
+            - Used to enable the continue arrow only after required listening
+
+          mapping:
+            - Defines which stimulus (target vs distractor) is on which side:
+                1 = target
+                2 = distractor
+              Example:
+                mapping = { left: 1, right: 2 } means:
+                  left → target
+                  right → distractor
+
+          mistakes:
+            - Counts wrong evaluations (not clicks)
+            - 1st mistake triggers shuffle + retry
+            - 2nd mistake triggers reveal
+
+          chosenSide / chosenSoundId / lockedSide:
+            - chosenSide: which side the user last clicked
+            - chosenSoundId: 1 or 2 (target vs distractor) for evaluation
+            - lockedSide: UI “selection highlight” remembered across question replay
+        */
+        let isPlaying = false;
+        let heardQuestionOnce = false;
+
+        let heardLeftOnce = false;
+        let heardRightOnce = false;
+
+        let mapping = { left: 1, right: 2 };   // 1 = target, 2 = distractor
+        let mistakes = 0;
+
+        let chosenSide = null;                 // "left" or "right"
+        let chosenSoundId = null;              // 1 or 2
+        let lockedSide = null;                 // "left" or "right"
+
+        // Reaction time reference point for this trial
+        const tStart = performance.now();
+
+        /*
+          ----------------------------------------------------------
+          Continue arrow enable/disable
+          ----------------------------------------------------------
+
+          setContinueEnabled(flag):
+            - Switches the arrow image between enabled and disabled icons
+            - Stores enabled state in a data attribute for easy checks
+        */
+        function setContinueEnabled(flag){
+          cont.src = flag ? (BASE + "next_small.png") : (BASE + "next_small_empty.png");
+          cont.dataset.enabled = flag ? "1" : "0";
+        }
+
+        /*
+          renderLockedSelection():
+            - Re-apply yellow highlight to the last clicked side
+              after question audio finishes (because question playback resets UI).
+        */
+        function renderLockedSelection(){
+          clearOptClasses();
+          if(lockedSide === "left"){
+            setOptState("left", "yellow");
+          }
+          if(lockedSide === "right"){
+            setOptState("right", "yellow");
+          }
+        }
+
+        /*
+          updateContinue():
+            - Continue is allowed only after all required listens
+              and when no audio is currently playing.
+        */
+        function updateContinue(){
+          const ok = heardQuestionOnce && heardLeftOnce && heardRightOnce && !isPlaying;
+          setContinueEnabled(ok);
+        }
+
+        // Initial state: continue disabled
+        setContinueEnabled(false);
+
+        /*
+          ----------------------------------------------------------
+          Top speaker UI toggling while question audio plays
+          ----------------------------------------------------------
+        */
+        function setTopPlayingUI(flag){
+          if(flag){
+            img.classList.add("highlight-orange");
+            topSpeakerIcon.src = ASSET.speakerPlaying;
+          } else {
+            img.classList.remove("highlight-orange");
+            topSpeakerIcon.src = ASSET.speaker;
+          }
+        }
+
+        /*
+          ----------------------------------------------------------
+          Option enabling/disabling
+          ----------------------------------------------------------
+
+          During audio playback, options are disabled to prevent overlap.
+        */
+        function disableOptions(){
+          optL.classList.add("disabled");
+          optR.classList.add("disabled");
+        }
+
+        function enableOptions(){
+          optL.classList.remove("disabled");
+          optR.classList.remove("disabled");
+        }
+
+        /*
+          ----------------------------------------------------------
+          Option highlight box state management
+          ----------------------------------------------------------
+
+          clearOptClasses():
+            - Reset both options to default gray state
+
+          setOptState(side, state):
+            - Apply show-[state] class to either left or right option
+        */
+        function clearOptClasses(){
+          optL.classList.remove("show-gray","show-yellow","show-green","show-red","show-orange");
+          optR.classList.remove("show-gray","show-yellow","show-green","show-red","show-orange");
+          optL.classList.add("show-gray");
+          optR.classList.add("show-gray");
+        }
+
+        function setOptState(side, state){
+          const el = (side === "left") ? optL : optR;
+          el.classList.remove("show-gray","show-yellow","show-green","show-red","show-orange");
+          el.classList.add("show-" + state);
+        }
+
+        /*
+          ----------------------------------------------------------
+          shuffleSides():
+            - Swaps mapping of target/distractor between left/right.
+            - Called after first mistake (after shuffle animation).
+        */
+        function shuffleSides(){
+          if(mapping.left === 1){
+            mapping = { left: 2, right: 1 };
+          } else {
+            mapping = { left: 1, right: 2 };
+          }
+        }
+
+        /*
+          ----------------------------------------------------------
+          getSideStim(side):
+            - Returns the stimulus data for a given UI side.
+            - Uses current mapping to decide whether that side is target or distractor.
+            - soundId is used for evaluation logic:
+                1 → target
+                2 → distractor
+        */
+        function getSideStim(side){
+          const sid = mapping[side]; // 1 target, 2 distractor
+          if(sid === 1){
+            return { soundId: 1, audioFile: target_audio, text: target_writing };
+          }
+          return { soundId: 2, audioFile: distractor_audio, text: distractor_writing };
+        }
+
+        /*
+          ----------------------------------------------------------
+          fixUmlauts(s):
+            - A very specific string fix for known encoding issues,
+              replacing two common mangled versions of “Brücke”.
+            - Note: this function is present but not used in renderTexts().
+              If you want it active, you’d apply it to L.text / R.text.
+        */
+        function fixUmlauts(s){
+          if(!s) return s;
+          return s
+            .replaceAll("Br?cke", "Brücke")
+            .replaceAll("BrÃ¼cke", "Brücke");
+        }
+
+        /*
+          ----------------------------------------------------------
+          renderTexts():
+            - Populates the left/right written option areas.
+            - Uses formatHighlightSentence() to highlight determiners.
+            - The displayed text depends on current mapping.
+        */
+        function renderTexts(){
+          const L = getSideStim("left");
+          const R = getSideStim("right");
+          txtLeft.innerHTML = formatHighlightSentence(L.text);
+          txtRight.innerHTML = formatHighlightSentence(R.text);
+        }
+
+        /*
+          ----------------------------------------------------------
+          runShuffleInBox():
+            - Shows shuffleIcon in the center panel.
+            - Plays shuffle.wav.
+            - Rotates the icon through a fixed step sequence.
+            - Hides the icon again.
+        */
+        async function runShuffleInBox(){
+          if(!shuffleIcon) return;
+
+          shuffleIcon.style.display = "block";
+
+          if(shuffleAudioEl){
+            unlockAudioOnce();
+            await playAudioSafe(shuffleAudioEl);
+          }
+
+          const steps = [40,80,120,160,200,240,280,320,0];
+          const stepMs = 50;
+
+          await new Promise(resolve => {
+            let i = 0;
+            const t = setInterval(() => {
+              shuffleIcon.style.transform =
+                "translate(-50%,-50%) rotate(" + steps[i] + "deg)";
+              i += 1;
+              if(i >= steps.length){
+                clearInterval(t);
+                resolve();
+              }
+            }, stepMs);
+          });
+
+          shuffleIcon.style.display = "none";
+          shuffleIcon.style.transform = "translate(-50%,-50%) rotate(0deg)";
+        }
+
+        /*
+          ----------------------------------------------------------
+          playQuestion():
+            - Plays the question prompt audio (qAudio).
+            - Marks heardQuestionOnce = true.
+            - Disables options during playback.
+            - Orange-highlight the main image + show playing speaker icon.
+        */
+        async function playQuestion(){
+          if(isPlaying) return;
+          heardQuestionOnce = true;
+          updateContinue();
+
+          isPlaying = true;
+          disableOptions();
+          setTopPlayingUI(true);
+
+          const ok = await playAudioSafe(qAudio);
+          if(!ok){
+            isPlaying = false;
+            setTopPlayingUI(false);
+            updateContinue();
+          }
+        }
+
+        /*
+          qAudio.onended:
+            - Clears playing UI
+            - Re-applies locked selection (yellow highlight)
+            - Re-enables options
+            - Updates continue state
+        */
+        qAudio.onended = function(){
+          isPlaying = false;
+          setTopPlayingUI(false);
+          renderLockedSelection();
+
+          if(heardQuestionOnce) enableOptions();
+          updateContinue();
+        };
+
+        // Replay question via top speaker button or clicking the main image
+        topPlayBtn.onclick = function(){ unlockAudioOnce(); playQuestion(); };
+        img.onclick = function(){ unlockAudioOnce(); playQuestion(); };
+
+        /*
+          ----------------------------------------------------------
+          playOption(side):
+            - Plays the option audio for left/right.
+            - Only allowed after question has been heard at least once.
+            - Locks the selected side and marks it yellow while playing.
+            - Stores chosenSoundId (1=target, 2=distractor) for later evaluation.
+        */
+        async function playOption(side){
+          if(isPlaying) return;
+          if(!heardQuestionOnce) return;
+
+          // Mark that this side has been listened to (for continue gating)
+          if(side === "left") heardLeftOnce = true;
+          if(side === "right") heardRightOnce = true;
+          updateContinue();
+
+          const stim = getSideStim(side);
+          lockedSide = side;
+          chosenSide = side;
+          chosenSoundId = stim.soundId;
+
+          isPlaying = true;
+          disableOptions();
+          clearOptClasses();
+          setOptState(side, "yellow");
+          updateContinue();
+
+          // Create a fresh Audio instance for each option playback
+          // (avoids state conflicts if clicked repeatedly)
+          const a = new Audio(BASE + stim.audioFile);
+          const ok = await playAudioSafe(a);
+          if(!ok){
+            // If playback failed, reset UI state
+            isPlaying = false;
+            clearOptClasses();
+            if(heardQuestionOnce) enableOptions();
+            updateContinue();
+            return;
+          }
+
+          // When option audio ends, re-enable options and update gating flags
+          a.onended = function(){
+            isPlaying = false;
+
+            if(side === "left") heardLeftOnce = true;
+            if(side === "right") heardRightOnce = true;
+
+            if(heardQuestionOnce) enableOptions();
+            updateContinue();
+          };
+        }
+
+        /*
+          ----------------------------------------------------------
+          resetForRetry():
+            - Resets choice/selection state after a shuffle retry.
+            - Clears “heard option” flags so participant must re-listen
+              to both left and right options (and question is replayed).
+            - Starts question audio again.
+        */
+        async function resetForRetry(){
+          chosenSide = null;
+          chosenSoundId = null;
+          clearOptClasses();
+          lockedSide = null;
+          renderLockedSelection();
+
+          heardLeftOnce = false;
+          heardRightOnce = false;
+          updateContinue();
+
+          playQuestion();
+        }
+
+        /*
+          ----------------------------------------------------------
+          evalChoice():
+            - Evaluates the currently chosen option (chosenSoundId).
+            - correct if chosenSoundId === 1 (target)
+            - Implements feedback and multi-attempt logic.
+
+          Important:
+            - This function is triggered by clicking the continue arrow
+              after the participant has listened to required audio.
+        */
+        async function evalChoice(){
+          if(chosenSoundId === null) return;
+
+          disableOptions();
+          isPlaying = true;
+          updateContinue();
+
+          const correct = (chosenSoundId === 1);
+
+          /*
+            ------------------------
+            Correct answer
+            ------------------------
+            - Green highlight on selected side
+            - Show stars overlay
+            - Play twinkle sound
+            - After twinkle ends, allow continue (which ends trial)
+          */
+          if(correct){
+            clearOptClasses();
+            setOptState(chosenSide, "green");
+            if(stars) stars.classList.add("show");
+
+            unlockAudioOnce();
+            const ok = await playAudioSafe(sndTwinkle);
+            if(!ok){
+              isPlaying = false;
+              updateContinue();
+              return;
+            }
+
+            sndTwinkle.onended = function(){
+              isPlaying = false;
+              updateContinue();
+            };
+            return;
+          }
+
+          /*
+            ------------------------
+            Wrong answer
+            ------------------------
+            - Red highlight on selected side
+            - Increment mistakes counter
+          */
+          mistakes += 1;
+          clearOptClasses();
+          setOptState(chosenSide, "red");
+
+          /*
+            ------------------------
+            First mistake behavior
+            ------------------------
+            - Optional follow-up audio (sndFollow)
+            - Then shuffle animation + sound
+            - Swap mapping (left<->right)
+            - Force re-listening by clearing heardLeftOnce/heardRightOnce
+            - Re-render texts to reflect new mapping
+            - Reset for retry (also replays question)
+          */
+          if(mistakes === 1){
+            unlockAudioOnce();
+
+            if(sndFollow){
+              const ok = await playAudioSafe(sndFollow);
+              if(!ok){
+                // If follow-up playback fails, still proceed with shuffle and retry
+                isPlaying = false;
+                setContinueEnabled(false);
+                await runShuffleInBox();
+                shuffleSides();
+                heardLeftOnce = false;
+                heardRightOnce = false;
+                updateContinue();
+                renderTexts();
+                await resetForRetry();
+                return;
+              }
+              sndFollow.onended = async function(){
+                isPlaying = false;
+                setContinueEnabled(false);
+                await runShuffleInBox();
+                shuffleSides();
+                heardLeftOnce = false;
+                heardRightOnce = false;
+                updateContinue();
+                renderTexts();
+                await resetForRetry();
+              };
+            } else {
+              // No follow-up audio; shuffle immediately
+              isPlaying = false;
+              setContinueEnabled(false);
+              await runShuffleInBox();
+              shuffleSides();
+              heardLeftOnce = false;
+              heardRightOnce = false;
+              updateContinue();
+              renderTexts();
+              await resetForRetry();
+            }
+            return;
+          }
+
+          /*
+            ------------------------
+            Second mistake and beyond
+            ------------------------
+            - Play ai_083 prompt (sndAi083)
+            - Reveal correct option (orange)
+            - Optionally play full correct sentence (sndFull)
+          */
+          if(mistakes >= 2){
+            unlockAudioOnce();
+            const okAi = await playAudioSafe(sndAi083);
+
+            const reveal = async function(){
+              // Mark which side is currently mapped to target and show it in orange
+              clearOptClasses();
+              if(mapping.left === 1) setOptState("left","orange");
+              if(mapping.right === 1) setOptState("right","orange");
+
+              // Optionally play full correct sentence audio
+              if(sndFull){
+                const okFull = await playAudioSafe(sndFull);
+                if(!okFull){
+                  isPlaying = false;
+                  updateContinue();
+                  return;
+                }
+                sndFull.onended = function(){
+                  isPlaying = false;
+                  updateContinue();
+                };
+              } else {
+                isPlaying = false;
+                updateContinue();
+              }
+            };
+
+            // If ai_083 could not play, reveal immediately
+            if(!okAi){
+              await reveal();
+              return;
+            }
+
+            // Reveal after ai_083 ends
+            sndAi083.onended = function(){
+              reveal();
+            };
+          }
+        }
+
+        /*
+          ----------------------------------------------------------
+          Wire option clicks
+          ----------------------------------------------------------
+          Options are clickable only when not disabled.
+        */
+        optL.onclick = function(){ if(!optL.classList.contains("disabled")) playOption("left"); };
+        optR.onclick = function(){ if(!optR.classList.contains("disabled")) playOption("right"); };
+
+        /*
+          ----------------------------------------------------------
+          Continue arrow click handler
+          ----------------------------------------------------------
+
+          Behavior depends on current state:
+            - If continue disabled, do nothing.
+            - If no option chosen yet, do nothing.
+            - If already correct (stars shown) OR mistakes >= 2, end trial.
+            - Else evaluate choice (may produce feedback and/or shuffle retry).
+        */
+        cont.onclick = async function(){
+          if(cont.dataset.enabled !== "1") return;
+
+          setContinueEnabled(false);
+
+          if(chosenSoundId === null){
+            return;
+          }
+
+          if(stars.classList.contains("show") || mistakes >= 2){
+            const rt = Math.round(performance.now() - tStart);
+            jsPsych.finishTrial({ mistakes: mistakes, rt: rt });
+            return;
+          }
+
+          await evalChoice();
+        };
+
+        /*
+          ----------------------------------------------------------
+          Trial initialization
+          ----------------------------------------------------------
+
+          - Disable options until question has played once
+          - Reset option highlight state
+          - Shuffle once at the start (so the correct answer isn’t always left)
+          - Render texts according to that mapping
+          - Start question audio immediately (autoplay attempt)
+        */
+        disableOptions();
+        clearOptClasses();
+        shuffleSides();
+        renderTexts();
+        updateContinue();
+
+        unlockAudioOnce();
+        playQuestion();
+      }
+    });
+  });
+
+  /*
+    ============================================================
+    GOODBYE / COMPLETION TRIAL
+    ============================================================
+
+    - Displays a completion message and an image
+    - Plays ai_090.mp3 automatically (best-effort)
+    - User clicks next button to finish final trial
+  */
+  timeline.push({
+    type: "html-button-response",
+    choices: [],
+    stimulus: `
+      <div class="center" style="margin-top:80px;">
+        <h2>Geschafft!</h2>
+        <p>Das hast du super gemacht!</p>
+
+        <img
+          src="stimuli_HX4/i_002.jpg"
+          alt="Endbild"
+          style="max-width:900px; margin-top:20px; border-radius:12px;"
+        >
+
+        <div style="margin-top:22px;">
+          <button class="next-btn" id="goodbye-next">
+            <img src="stimuli_HX4/next.png" alt="Weiter">
+          </button>
+        </div>
+
+        <audio id="goodbye-audio" src="stimuli_HX4/ai_090.mp3"></audio>
+      </div>
+    `,
+    on_load: function(){
+      unlockAudioOnce();
+      const a = document.getElementById("goodbye-audio");
+      if(a){
+        // Best-effort: do not crash if blocked
+        playAudioSafe(a).catch(()=>{});
+      }
+      const btn = document.getElementById("goodbye-next");
+      if(btn){ btn.onclick = () => jsPsych.finishTrial(); }
+    }
+  });
+
+  /*
+    ============================================================
+    START jsPsych
+    ============================================================
+
+    jsPsych.init:
+      - timeline: the constructed experiment timeline
+      - display_element: the DOM node where jsPsych renders
+  */
+  jsPsych.init({
+    timeline,
+    display_element: "jspsych-target"
+  });
+
+})(); // end main IIFE
+</script>
+</body>
+</html>

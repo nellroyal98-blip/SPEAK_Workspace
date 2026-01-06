@@ -95,7 +95,7 @@
       Includes rounded corners and a hover-ready cursor.
     */
     .target-img {
-      width:260px;
+      width:500px;
       border-radius:20px;
       transition: box-shadow 0.2s;
       cursor:pointer;
@@ -301,8 +301,10 @@ function loadCSV(url){
       /*
         Advances the jsPsych timeline manually.
       */
-      next.onclick = () => jsPsych.finishTrial();
-    }
+      playAudio();
+
+  next.onclick = () => jsPsych.finishTrial();
+}
   });
 
   /* ===============================
@@ -350,74 +352,72 @@ function loadCSV(url){
         Attach logic for audio playback, feedback, and trial progression.
       */
       on_load: function(){
-        const audio = document.getElementById("word-audio");
-        const img   = document.getElementById("target-img");
-        const play  = document.getElementById("play-word");
-        const next  = document.getElementById("next-trial");
+  const audio = document.getElementById("word-audio");
+  const img   = document.getElementById("target-img");
+  const play  = document.getElementById("play-word");
+  const next  = document.getElementById("next-trial");
 
-        /*
-          Ensures that reward feedback is shown only once,
-          even if the audio is replayed.
-        */
-        let listened = false;
+  // Word-Audio abspielen + oranger Rahmen
+  function playAudio(){
+    img.classList.add("highlight-orange");
+    try { audio.currentTime = 0; } catch(e){}
+    audio.play();
+  }
 
-        /*
-          Plays the word audio and highlights the image.
-        */
-        function playAudio(){
-          img.classList.add("highlight-orange");
-          audio.currentTime = 0;
-          audio.play();
-        }
+  // Speaker und Bild können jederzeit das Audio neu starten
+  play.onclick = playAudio;
+  img.onclick  = playAudio;
 
-        play.onclick = playAudio;
-        img.onclick  = playAudio;
+  // Beim Ende der Wiedergabe: Rahmen weg, Pfeil sichtbar
+  audio.onended = function(){
+    img.classList.remove("highlight-orange");
+    next.classList.remove("hide");   // Pfeil sichtbar machen (idempotent)
+  };
 
-        /*
-          When audio finishes:
-          - remove highlight
-          - show reward overlay (once)
-          - reveal next button after delay
-        */
-        audio.onended = function(){
-          img.classList.remove("highlight-orange");
+  // Direkt beim Laden des Trials einmal automatisch abspielen
+  playAudio();
 
-          if(!listened){
-            listened = true;
+  // Wenn auf den Pfeil geklickt wird: Sterne + Sound, dann Trial-Ende
+  next.onclick = function(){
+    // Mehrfachklick auf den Pfeil verhindern
+    next.onclick = null;
 
-            /*
-              Fullscreen overlay providing positive feedback.
-              Blocks interaction during reward animation.
-            */
-            const overlay = document.createElement("div");
-            overlay.style =
-              "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
-              "background:rgba(255,255,255,0.9);" +
-              "display:flex;align-items:center;justify-content:center;z-index:9999;";
-            overlay.innerHTML = `
-              <img src="stimuli_C/stars.png" style="width:200px;">
-              <audio src="stimuli_C/stars_correct.mp3" autoplay></audio>
-            `;
-            document.body.appendChild(overlay);
+    const overlay = document.createElement("div");
+    overlay.style =
+      "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
+      "background:rgba(255,255,255,0.9);" +
+      "display:flex;align-items:center;justify-content:center;z-index:9999;";
+    overlay.innerHTML = `
+      <img src="stimuli_C/stars.png" style="width:200px;">
+      <audio id="reward-audio" src="stimuli_C/stars_correct.mp3" autoplay></audio>
+    `;
+    document.body.appendChild(overlay);
 
-            /*
-              Remove overlay after 1.5 seconds and allow progression.
-            */
-            setTimeout(() => {
-              document.body.removeChild(overlay);
-              next.classList.remove("hide");
-            }, 1500);
-          }
-        };
+    const reward = overlay.querySelector("#reward-audio");
+    let finished = false;
 
-        /*
-          Ends the current trial and proceeds in the timeline.
-        */
-        next.onclick = () => jsPsych.finishTrial();
+    function endTrial(){
+      if(finished) return;
+      finished = true;
+      if(document.body.contains(overlay)) {
+        document.body.removeChild(overlay);
       }
-    });
-  });
+      jsPsych.finishTrial();
+    }
 
+    // Normalfall: nach Ende der Sound-Datei mit kleinem Puffer
+    if(reward){
+      reward.onended = function(){
+        setTimeout(endTrial, 200);
+      };
+    }
+
+    // Fallback, falls Audio nicht lädt/abgebrochen wird
+    setTimeout(endTrial, 3000);
+  };
+}
+  });
+  });
   /* ===============================
      GOODBYE
      =============================== */

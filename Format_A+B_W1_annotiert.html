@@ -46,7 +46,7 @@
     .speaker-btn img { height:70px; transition: filter 0.1s; }
 
     /* Story image presentation. */
-    .story-img { display:block; margin:18px auto; width:420px; max-width:90%; border-radius:12px; }
+    .story-img { display:block; margin:18px auto; width:800px; max-width:95%; border-radius:12px; }
 
     /* Clickable highlight for definitions (target stage). */
     .clickable { cursor:pointer; box-shadow:0 0 0 6px rgba(80,200,120,0.25); }
@@ -57,17 +57,27 @@
 
     /* Grid for V2 4-image multiple choice interaction. */
     .img-grid {
-      display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
-      gap:44px; justify-content:center; margin:40px auto; max-width:600px;
-    }
-    .img-grid img { width:235px; border:5px solid transparent; border-radius:18px; transition:border 0.2s; cursor:pointer; }
-    .img-grid img.green { border-color:#4caf50 !important; background:#e9fbe9; }
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  grid-template-rows:1fr 1fr;
+  gap:44px;
+  justify-content:center;
+  margin:40px auto;
+  max-width:800px;     /* vorher 600px */
+}
+.img-grid img {
+  width:300px;         /* vorher 235px */
+  border:5px solid transparent;
+  border-radius:18px;
+  transition:border 0.2s;
+  cursor:pointer;
+}    .img-grid img.green { border-color:#4caf50 !important; background:#e9fbe9; }
     .img-grid img.red { border-color:#f44336 !important; background:#ffeaea; }
     .img-grid img.yellow { border-color:#ffc107 !important; background:#fffbe4; }
 
     /* Instruction and final big images. */
-    .big-instr { display:block; margin:0 auto 18px auto; height:370px; }
-    .final-big { display:block; margin:0 auto 18px auto; height:320px; }
+    .big-instr { display:block; margin:0 auto 18px auto; height:500px; }
+    .final-big { display:block; margin:0 auto 18px auto; height:380px; }
 
     
   </style>
@@ -213,17 +223,19 @@ function makeV2Trial(trial, idx){
       const btn = document.getElementById("play-vocab-audio");
       const audio = document.getElementById("vocab-audio");
       const imgs = document.querySelectorAll(".img-grid img");
-
+ function resetAfterMainAudio(){
+        imgs.forEach(im => { im.style.pointerEvents = "auto"; im.style.opacity = "1"; });
+        btn.querySelector('img').src = "stimuli/speaker.png";
+        document.body.style.cursor = "";
+      }
       /* Show playing icon, hide pointer, auto-play initially. */
       btn.querySelector('img').src = "stimuli/speaker_playing.png";
       document.body.style.cursor = "none";
       audio.play();
 
       /* Re-enable choice after audio finishes. */
-      audio.onended = function(){
-        imgs.forEach(im => { im.style.pointerEvents = "auto"; im.style.opacity = "1"; });
-        btn.querySelector('img').src = "stimuli/speaker.png";
-        document.body.style.cursor = "";
+       audio.onended = function(){
+        resetAfterMainAudio();
       };
 
       /* Replay audio on speaker click (disables choices while playing). */
@@ -251,11 +263,33 @@ function makeV2Trial(trial, idx){
           } else {
             img.classList.add('red');
             errors++;
-            if(errors === 1){
-              /* First wrong attempt: follow-up audio, then unlock. */
-              const a = new Audio("stimuli/" + trial.followup_audio_first_false_answer);
-              a.play();
-              a.onended = () => { img.classList.remove('red'); locked = false; };
+             if(errors === 1){
+              /* Erster Fehler: Feedback-Audio, dann Vokabelaudio noch einmal wie zu Beginn. */
+              const fb = new Audio("stimuli/" + trial.followup_audio_first_false_answer);
+              fb.play();
+              fb.onended = () => {
+                // Alles sperren und ausgrauen, wie am Trial-Start
+                imgs.forEach(im => {
+                  im.style.pointerEvents = "none";
+                  im.style.opacity = "0.7";
+                });
+                btn.querySelector('img').src = "stimuli/speaker_playing.png";
+                document.body.style.cursor = "none";
+
+                // Vokabelaudio (Hauptaudio) von vorne abspielen
+                try { audio.currentTime = 0; } catch(e) {}
+                const oldOnEnded = audio.onended;
+                audio.onended = function(){
+                  // normales Re-Enable
+                  resetAfterMainAudio();
+                  // Rot-Markierung zurücksetzen, neue Antwort erlauben
+                  img.classList.remove('red');
+                  locked = false;
+                  // onended zurücksetzen, damit spätere Abspielvorgänge wieder wie gewohnt laufen
+                  audio.onended = oldOnEnded;
+                };
+                audio.play();
+              };
             } else {
               /* Second wrong attempt: highlight correct option and finish. */
               setTimeout(() => {
@@ -323,49 +357,67 @@ function startWiederholungsuebung(trialsData, timeline){
         `;
       },
       choices: [],
-      on_load: function(){
-        const audio = document.getElementById("repeat-audio");
-        const nextBtnDiv = document.getElementById("repeat-next-btn");
-        const highlightOrange = document.getElementById("highlight-orange");
-        const nextBtn = nextBtnDiv.querySelector("button");
+        on_load: function(){
+      const audio = document.getElementById("repeat-audio");
+      const nextBtnDiv = document.getElementById("repeat-next-btn");
+      const highlightOrange = document.getElementById("highlight-orange");
+      const nextBtn = nextBtnDiv.querySelector("button");
+      const img = document.getElementById("repeat-img");
 
+      /* Gemeinsame Logik für jeden Durchlauf des Vokabel Audios */
+      function playRepeatAudio() {
+        // Alles so aussehen lassen wie bei einem neuen Stimulus
+        if (highlightOrange) highlightOrange.classList.remove('hide');
+        if (nextBtnDiv) nextBtnDiv.classList.add('hide');
         document.body.style.cursor = "none";
-        highlightOrange.classList.remove('hide');
-        nextBtnDiv.classList.add('hide');
-        
-        /* Automatically play audio, hide pointer. */
+
+        if (img) img.style.pointerEvents = "none";
+
+        try { audio.currentTime = 0; } catch(e){}
         audio.play();
-
-        audio.onended = function(){
-          /* After audio, hide highlight and show next. */
-          highlightOrange.classList.add('hide');
-          nextBtnDiv.classList.remove('hide');
-          document.body.style.cursor = "";
-        };
-
-        nextBtn.onclick = function(){
-          /* Feedback overlay with star sound after participant confirms next. */
-          const feedbackDiv = document.createElement('div');
-          feedbackDiv.style = "position:fixed; left:0;top:0;width:100vw;height:100vh;z-index:10000;background:rgba(255,255,255,0.94);display:flex;flex-direction:column;align-items:center;justify-content:center;";
-          feedbackDiv.innerHTML = `<img src="stimuli/stars.png" style="width:190px;"><audio id="star-feedback" src="stimuli/stars_correct.mp3" autoplay></audio>`;
-          document.body.appendChild(feedbackDiv);
-
-          const starAudio = feedbackDiv.querySelector('#star-feedback');
-          let finished = false;
-          
-          function finishNow(){
-            if(!finished){
-              if(document.body.contains(feedbackDiv)) document.body.removeChild(feedbackDiv);
-              jsPsych.finishTrial();
-              finished = true;
-            }
-          }
-
-          starAudio.onended = function(){ setTimeout(finishNow, 650); };
-          /* Fallback timeout in case audio fails to play. */
-          setTimeout(finishNow, 1900);
-        };
       }
+
+      // Bild klickbar machen: bei jedem Klick wird das Audio erneut gestartet
+      if (img) {
+        img.style.cursor = "pointer";
+        img.addEventListener('click', function(){
+          playRepeatAudio();
+        });
+      }
+
+      // Initiales automatisches Abspielen beim Start des Trials
+      playRepeatAudio();
+
+      audio.onended = function(){
+        // Nach Audioende wieder Zustand wie "bereit zum Weiterklicken"
+        if (highlightOrange) highlightOrange.classList.add('hide');
+        if (nextBtnDiv) nextBtnDiv.classList.remove('hide');
+        document.body.style.cursor = "";
+        if (img) img.style.pointerEvents = "auto";
+      };
+
+      nextBtn.onclick = function(){
+        const feedbackDiv = document.createElement('div');
+        feedbackDiv.style = "position:fixed; left:0;top:0;width:100vw;height:100vh;z-index:10000;background:rgba(255,255,255,0.94);display:flex;flex-direction:column;align-items:center;justify-content:center;";
+        feedbackDiv.innerHTML = `<img src="stimuli/stars.png" style="width:190px;"><audio id="star-feedback" src="stimuli/stars_correct.mp3" autoplay></audio>`;
+        document.body.appendChild(feedbackDiv);
+
+        const starAudio = feedbackDiv.querySelector('#star-feedback');
+        let finished = false;
+        
+        function finishNow(){
+          if(!finished){
+            if(document.body.contains(feedbackDiv)) document.body.removeChild(feedbackDiv);
+            jsPsych.finishTrial();
+            finished = true;
+          }
+        }
+
+        starAudio.onended = function(){ setTimeout(finishNow, 650); };
+        setTimeout(finishNow, 1900);
+      };
+    }
+
     });
   });
 
@@ -520,31 +572,56 @@ function startWiederholungsuebung(trialsData, timeline){
               } finally { releaseAudioLock(); }
             }
 
-            /* Step 3: user can click target to hear definition (one time). */
-            info.textContent = "Klicke auf das Bild, um die Worterklärung zu hören.";
-            img.style.pointerEvents = 'auto';
-            img.classList.add('clickable');
+/* Step 3: user can click target to hear definition, beliebig oft; orangener Rahmen jedes Mal. */
+info.textContent = "Klicke auf das Bild, um die Worterklärung zu hören.";
+img.style.pointerEvents = 'auto';
+img.classList.add('clickable');
 
-            await new Promise(resolve => {
-              img.addEventListener('click', async function handler(){
-                img.removeEventListener('click', handler);
-                img.style.pointerEvents = 'none';
-                img.classList.remove('clickable');
-                
-                if(row.definition_audio){
-                  const aDef = makeAudio('stimuli/' + row.definition_audio);
-                  img.classList.add('playing-orange');
-                  await acquireAudioLock();
-                  try{ await playAudio(aDef); }
-                  finally { releaseAudioLock(); img.classList.remove('playing-orange'); }
-                }
-                
-                /* After definition, show next arrow. */
-                info.textContent = "Klicke den grünen Pfeil, um weiterzumachen.";
-                nextWrap.classList.remove('hide');
-                nextBtn.onclick = function(){ nextBtn.onclick = null; nextWrap.classList.add('hide'); resolve(); };
-              }, { once: true });
-            });
+await new Promise(resolve => {
+  const defSrc = row.definition_audio ? 'stimuli/' + row.definition_audio : null;
+  let firstPlayDone = false;
+  let isPlaying = false;
+
+  async function playDefinition() {
+    if (!defSrc || isPlaying) return;
+    isPlaying = true;
+
+    const aDef = makeAudio(defSrc);
+    img.classList.add('playing-orange');
+    img.style.pointerEvents = 'none';
+
+    await acquireAudioLock();
+    try {
+      await playAudio(aDef);
+    } finally {
+      releaseAudioLock();
+      img.classList.remove('playing-orange');
+      img.style.pointerEvents = 'auto';
+      isPlaying = false;
+    }
+  }
+
+  img.addEventListener('click', async function onClick(){
+    await playDefinition();
+
+    if (!firstPlayDone) {
+      // Erstes Mal: Pfeil anzeigen und Ablauf freischalten
+      firstPlayDone = true;
+      img.classList.remove('clickable');
+      info.textContent = "Klicke den grünen Pfeil, um weiterzumachen.";
+      nextWrap.classList.remove('hide');
+
+      nextBtn.onclick = function(){
+        nextBtn.onclick = null;
+        nextWrap.classList.add('hide');
+        img.removeEventListener('click', onClick);
+        resolve();
+      };
+    }
+    // Weitere Klicks: nur nochmal Definition mit orangem Rahmen,
+    // resolve() passiert erst, wenn der Pfeil geklickt wird.
+  });
+});
 
           } else {
             /* No target for this row; skip directly to next button. */

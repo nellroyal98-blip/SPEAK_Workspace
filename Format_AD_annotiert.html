@@ -44,7 +44,7 @@
       border:none;
       cursor:pointer;
     }
-    .next-btn img{ height:56px; }
+    .next-btn img{ height:90px; }
 
     /* Speaker icon used to trigger audio playback. */
     .speaker-btn{
@@ -52,7 +52,7 @@
       border:none;
       cursor:pointer;
     }
-    .speaker-btn img{ height:60px; }
+    .speaker-btn img{ height:90px; }
 
     /* Row layout for the four sentence boxes (image1, image2, article, target image). */
     .sentence-row{
@@ -64,15 +64,15 @@
 
     /* Square boxes that contain either images, text, or article words. */
     .sentence-box{
-      width:150px;
-      height:150px;
-      border:4px solid #333;
+      width:250px;
+      height:250px;
+      border:6px solid #333;
       border-radius:16px;
       background:#f3f3f3;
       display:flex;
       align-items:center;
       justify-content:center;
-      font-size:1.8em;
+      font-size:3.5em;
       position:relative;
       box-sizing:border-box;
     }
@@ -101,7 +101,7 @@
       padding:6px 6px 8px 6px;
       background:#f8f8f8;
       cursor:pointer;
-      width:120px;
+      width:140px;
       box-sizing:border-box;
       display:flex;
       flex-direction:column;
@@ -182,7 +182,14 @@
     border:none;
     cursor:pointer;
   }
-
+.ui-locked {
+  pointer-events: none;
+}
+.speakLogo{
+  height: 90px;
+  display: block;
+  margin: 0 auto 12px auto;
+}
   </style>
 </head>
 <body>
@@ -198,6 +205,8 @@
 <script>
   /* Base directory for all audio and image files. */
   const STIM = "stimuli_AD/";
+const YOURTURN_AUDIO = STIM + "yourturn.mp3";
+let __yourturnPlayed = false;
 
   /*
     Utility: Load a CSV file using PapaParse and return a Promise resolving to
@@ -221,15 +230,48 @@
     Returns a Promise that resolves automatically after the audio finishes or
     fails to load. Used for timed chaining of audio, highlights, and stars.
   */
-  function playAudio(src){
-    return new Promise(res => {
-      if(!src){ res(); return; }
-      const a = new Audio(src);
-      a.onended = () => res();
-      a.onerror = () => res();
-      a.play().catch(()=>res());
-    });
-  }
+  let __audioBusy = false;
+let __currentAudio = null;
+
+function playAudio(src){
+  return new Promise(res => {
+    if(!src){ res(); return; }
+
+    // If something is already playing, ignore this request.
+    if(__audioBusy){ res(); return; }
+
+    __audioBusy = true;
+
+    // Lock UI (prevents any clicks while audio is running)
+    const target = document.getElementById("jspsych-target");
+    if(target) target.classList.add("ui-locked");
+
+    // Stop any leftover audio reference just in case
+    try{
+      if(__currentAudio){
+        __currentAudio.pause();
+        __currentAudio.currentTime = 0;
+      }
+    }catch(e){}
+    __currentAudio = null;
+
+    const a = new Audio(src);
+    __currentAudio = a;
+
+    const cleanup = () => {
+      __audioBusy = false;
+      __currentAudio = null;
+      if(target) target.classList.remove("ui-locked");
+      res();
+    };
+
+    a.onended = cleanup;
+    a.onerror = cleanup;
+
+    a.play().catch(cleanup);
+  });
+}
+
 
   /* Map article words to CSS classes defining text color. */
   function articleClass(txt){
@@ -291,22 +333,26 @@
       type:"html-button-response",
       choices:[],   // No default buttons; navigation via custom HTML elements.
       stimulus:`
-        <div class="center" style="margin-top:40px;">
+        <div class="center" style="margin-top:10px;">
+                              <img class="speakLogo" src="${STIM}SPEAK_transparenter_HG.png" alt="SPEAK Logo">
+
           <h2>Woche 10 – Aufgabe G5</h2>
           <p>Hör dir die Erklärung an. Klicke danach auf den Pfeil, um zu starten.</p>
 
           <div style="margin-top:10px;">
             <button class="speaker-btn" id="welcome-speaker">
-              <img src="stimuli_AD/speaker.png" alt="Erklärung anhören">
-            </button>
+  <img id="welcome-speaker-img" src="stimuli_AD/speaker.png" alt="Erklärung anhören">
+</button>
           </div>
 
           <div style="margin-top:22px;">
             <img
-              src="stimuli_AD/Week10_G5.png"
-              alt="Beispiel"
-              style="max-width:60%; border-radius:12px; border:6px solid #bbbbbb;"
-            >
+  id="welcome-example-img"
+  src="stimuli_AD/Week10_G5.png"
+  alt="Beispiel"
+  style="max-width:60%; border-radius:12px; border:6px solid #bbbbbb; cursor:pointer;"
+>
+
           </div>
 
           <div style="margin-top:22px;">
@@ -319,16 +365,31 @@
       on_load: function(){
         /* Play explanation audio when speaker icon clicked. */
         const sp = document.getElementById("welcome-speaker");
+        const spImg = document.getElementById("welcome-speaker-img");
+
         const btn = document.getElementById("welcome-next");
+        const exampleImg = document.getElementById("welcome-example-img");
+
 let explanationPlayed = false;
 
-        if(sp && general.explanation_audio){
-  sp.onclick = async () => {
-    if(explanationPlayed) return;
-    explanationPlayed = true;
-    await playAudio(STIM + general.explanation_audio);
-    if(btn) btn.style.display = "inline-block";
-  };
+        async function playWelcomeAudio(){
+  if(explanationPlayed) return;
+
+  explanationPlayed = true;
+
+  if(spImg) spImg.src = "stimuli_AD/speaker_playing.png";
+  await playAudio(STIM + general.explanation_audio);
+  if(spImg) spImg.src = "stimuli_AD/speaker.png";
+
+  if(btn) btn.style.display = "inline-block";
+}
+
+if(sp){
+  sp.onclick = playWelcomeAudio;
+}
+
+if(exampleImg){
+  exampleImg.onclick = playWelcomeAudio;
 }
 
         /* Continue to next screen when next-icon clicked. */
@@ -379,7 +440,7 @@ let explanationPlayed = false;
 
               <!-- Button to play the guided example sequence -->
               <button class="speaker-btn" id="ex-play">
-                <img src="stimuli_AD/speaker.png" alt="Play">
+<img id="ex-speaker-img" src="stimuli_AD/speaker.png" alt="Play">
               </button>
 
               <div class="center" style="margin-top:10px;">
@@ -396,6 +457,8 @@ let explanationPlayed = false;
           const b3 = document.getElementById("ex-b3");
           const b4 = document.getElementById("ex-b4");
           const playBtn = document.getElementById("ex-play");
+          const speakerImg = document.getElementById("ex-speaker-img");
+
           const nextBtn = document.getElementById("ex-next");
 
           /* Preload audio references. */
@@ -429,49 +492,58 @@ let explanationPlayed = false;
             };
           }
 
-          /* Guided complete example sequence. */
-          if(playBtn){
-            playBtn.onclick = async () => {
-              if(playing) return;
-              playing = true;
+/* Guided complete example sequence. */
+if(playBtn){
+  playBtn.onclick = async () => {
+    if(playing) return;
+    playing = true;
 
-              /* image1 */
-              if(b1 && a1){
-                b1.classList.add("highlight");
-                await playAudio(a1);
-                b1.classList.remove("highlight");
-              }
+    // NEW: speaker icon switches to "playing" state while the sequence runs
+    const speakerImg = document.getElementById("ex-speaker-img");
+    if(speakerImg) speakerImg.src = "stimuli_AD/speaker_playing.png";
 
-              /* image2 */
-              if(b2 && a2){
-                b2.classList.add("highlight");
-                await playAudio(a2);
-                b2.classList.remove("highlight");
-              }
+    /* image1 */
+    if(b1 && a1){
+      b1.classList.add("highlight");
+      await playAudio(a1);
+      b1.classList.remove("highlight");
+    }
 
-              /* Display article + target image */
-              if(b3){
-                b3.textContent = article;
-const cls = articleClass(article);
-if(cls) b3.classList.add(cls);
-              }
-              if(b4 && img3){
-                b4.innerHTML = `<img src="${img3}">`;
-              }
+    /* image2 */
+    if(b2 && a2){
+      b2.classList.add("highlight");
+      await playAudio(a2);
+      b2.classList.remove("highlight");
+    }
 
-              /* Audio for article segment */
-              if(b3) b3.classList.add("highlight");
-              if(b4) b4.classList.add("highlight");
-              if(a3){ await playAudio(a3); }
-              if(b3) b3.classList.remove("highlight");
-              if(b4) b4.classList.remove("highlight");
+    /* Display article + target image */
+    if(b3){
+      b3.textContent = article;
+      const cls = articleClass(article);
+      if(cls) b3.classList.add(cls);
+    }
+    if(b4 && img3){
+      b4.innerHTML = `<img src="${img3}">`;
+    }
 
-              await starsSuccess();
+    /* Audio for article segment */
+    if(b3) b3.classList.add("highlight");
+    if(b4) b4.classList.add("highlight");
+    if(a3){ await playAudio(a3); }
+    if(b3) b3.classList.remove("highlight");
+    if(b4) b4.classList.remove("highlight");
 
-              if(nextBtn) nextBtn.style.display = "inline-block";
-              playing = false;
-            };
-          }
+    await starsSuccess();
+
+    if(nextBtn) nextBtn.style.display = "inline-block";
+
+    // NEW: speaker icon back to normal when done
+    if(speakerImg) speakerImg.src = "stimuli_AD/speaker.png";
+
+    playing = false;
+  };
+}
+
 
           /* Next example trial */
           if(nextBtn){
@@ -523,7 +595,7 @@ if(cls) b3.classList.add(cls);
 
               <!-- Button repeats the question (article prompt + images). -->
               <button class="speaker-btn" id="t-play">
-                <img src="stimuli_AD/speaker.png" alt="Play question">
+<img id="task-speaker-img" src="stimuli_AD/speaker.png" alt="Play question">
               </button>
 
               <!-- Tile grid below for article selection -->
@@ -538,8 +610,33 @@ if(cls) b3.classList.add(cls);
           const box3 = document.getElementById("t-b3");
           const box4 = document.getElementById("t-b4");
           const playBtn = document.getElementById("t-play");
+          const speakerImg = document.getElementById("task-speaker-img");
+
           const grid = document.getElementById("tiles");
+
+          // Autoplay "yourturn" exactly once, right when Aufgabe 1 appears
+if(idx === 0 && !__yourturnPlayed){
+  __yourturnPlayed = true;
+
+  // keep tiles disabled until the clip is done
+  setTilesDisabled(true);
+
+  (async () => {
+    await playAudio(YOURTURN_AUDIO);
+
+    // keep your existing rule: tiles only become usable after the question was played once
+    if(questionPlayed){
+      setTilesDisabled(false);
+    }
+  })();
+}
 let questionPlayed = false;
+function setTilesDisabled(flag){
+  document.querySelectorAll(".task-tile").forEach(t => {
+    if(flag) t.classList.add("disabled");
+    else t.classList.remove("disabled");
+  });
+}
 
           /* Audio references from CSV. */
           const questionAud = row.question ? STIM + row.question : "";
@@ -563,29 +660,43 @@ let questionPlayed = false;
           }
 
           /* Play full question sequence on speaker click. */
-          if(playBtn){
+/* Play full question sequence on speaker click. */
+if(playBtn){
   playBtn.onclick = async () => {
+    if(__audioBusy) return;
 
-    if(!questionPlayed){
-      questionPlayed = true;
-      document.querySelectorAll(".task-tile").forEach(t =>
-        t.classList.remove("disabled")
-      );
-    }
+    // Always grey out tiles while the full question is being played
+    setTilesDisabled(true);
+
+    if(speakerImg) speakerImg.src = "stimuli_AD/speaker_playing.png";
 
     if(questionAud){ await playAudio(questionAud); }
+
     if(box1 && a1){
       box1.classList.add("highlight");
       await playAudio(a1);
       box1.classList.remove("highlight");
     }
+
     if(box2 && a2){
       box2.classList.add("highlight");
       await playAudio(a2);
       box2.classList.remove("highlight");
     }
+
+    if(speakerImg) speakerImg.src = "stimuli_AD/speaker.png";
+
+    // After the first full question playback, tiles become usable
+    if(!questionPlayed) questionPlayed = true;
+
+    // Re enable tiles after playback, but only if the question has been played at least once
+    if(questionPlayed){
+      setTilesDisabled(false);
+    }
   };
 }
+
+
 
           /* Build tile array from columns image4..image9 + article/audio mapping. */
           const tileData = [];
@@ -632,6 +743,8 @@ tile.classList.add("disabled");
 
             /* Tile click handler: shows article + image in sentence boxes. */
             tile.onclick = async () => {
+              if(tile.classList.contains("disabled")) return;
+
 const chosenArticleTop = (artTop || "").trim(); // den/die/das
 const chosenArticle    = (art    || "").trim(); // der/die/das              if(!chosenArticle) return;
 

@@ -192,7 +192,7 @@ body{ background:#fff; margin:0; padding:0; }
   Title card layout for the introduction screen.
 */
 .titleCard{
-  width:760px;
+  width:640px;
   margin:0 auto;
   text-align:center;
 }
@@ -201,10 +201,14 @@ body{ background:#fff; margin:0; padding:0; }
   Title image styling.
 */
 .titleCard img.titleImg{
-  width:760px;
+  width:500px;
   border-radius:18px;
 }
-
+.speakLogo{
+  height: 90px;
+  display: block;
+  margin: 0 auto 12px auto;
+}
 /*
   Speaker + navigation row on the title screen.
 */
@@ -221,7 +225,7 @@ body{ background:#fff; margin:0; padding:0; }
   Speaker icons on the title screen.
 */
 .speakerRow img{
-  height:120px;
+  height:90px;
   cursor:pointer;
 }
 
@@ -251,6 +255,8 @@ body{ background:#fff; margin:0; padding:0; }
 const BASE = "/speakjspsych/";
 const DATA = BASE + "data/";
 const STIM = BASE + "stimuli_V_3/";
+const YOURTURN_FILE = "yourturn.mp3";
+let __yourturnPlayed = false;
 
 /*
   Loads a CSV file and returns a Promise resolving to cleaned rows.
@@ -277,15 +283,35 @@ function loadCSV(url){
 */
 function playAudio(file){
   return new Promise(resolve=>{
-    if(!file || file==="None.mp3"){
+    if(!file || file === "None.mp3"){
       resolve();
       return;
     }
+
     const a = new Audio(STIM + file);
-    a.play().catch(()=>resolve());
-    a.onended = ()=>resolve();
+
+    let done = false;
+    const cleanup = () => {
+      if(done) return;
+      done = true;
+      try { a.onended = null; a.onerror = null; } catch(e){}
+      resolve();
+    };
+
+    a.onended = cleanup;
+    a.onerror = cleanup;
+
+    // Failsafe: if the browser never fires ended/error, we still continue.
+    const maxMs = 20000;
+    const t = setTimeout(cleanup, maxMs);
+
+    a.play()
+      .then(()=>{})
+      .catch(()=>cleanup())
+      .finally(()=>{ clearTimeout(t); });
   });
 }
+
 
 /*
   Shows a highlight overlay by element ID.
@@ -309,16 +335,18 @@ function hideHL(id){
 function setNextEnabled(enabled){
   const nx = document.getElementById("nx");
   if(!nx) return;
+
   if(enabled){
     nx.src = STIM + "next.png";
     nx.classList.remove("disabled");
-    nx.dataset.enabled="1";
+    nx.dataset.enabled = "1";
+    nx.style.display = "block";   // show only when enabled
   } else {
-    nx.src = STIM + "next_empty.png";
-    nx.classList.add("disabled");
-    nx.dataset.enabled="0";
+    nx.dataset.enabled = "0";
+    nx.style.display = "none";    // hide completely when disabled
   }
 }
+
 
 /*
   Main async experiment wrapper.
@@ -342,17 +370,19 @@ const title = {
   stimulus:`
     <div class="wrap">
       <div class="titleCard">
-        <div class="center" style="margin-top:40px;">
+        <div class="center" style="margin-top:10px;">
+            <img class="speakLogo" src="${STIM}SPEAK_transparenter_HG.png" alt="SPEAK Logo">
+
           <h2>Woche 12 – Aufgabe G3</h2>
           <p style="font-size:20px; margin-bottom:14px;">
             Hör dir die Erklärung an. Klicke danach auf den Pfeil, um zu starten.
           </p>
 
-          <img class="titleImg framed" src="${STIM}Week12_G3.png">
+          <img id="titleImg" class="titleImg framed" src="${STIM}Week12_G3.png">
 
           <div class="speakerRow">
             <img id="sp" src="${STIM}speaker.png">
-            <img id="nx" class="disabled" src="${STIM}next_empty.png" data-enabled="0">
+<img id="nx" src="${STIM}next.png" data-enabled="0" style="display:none;">
             <audio id="au" src="${STIM}${general.explanation_audio || ""}"></audio>
           </div>
         </div>
@@ -360,36 +390,58 @@ const title = {
     </div>
   `,
   on_load(){
-    const sp=document.getElementById("sp");
-    const nx=document.getElementById("nx");
-    const au=document.getElementById("au");
-    let can=false;
+  const sp = document.getElementById("sp");
+  const nx = document.getElementById("nx");
+  const au = document.getElementById("au");
+  const titleImg = document.getElementById("titleImg");
 
-    /*
-      Plays the explanation audio and updates speaker icon.
-    */
-    function play(){
-      sp.src = STIM + "speaker_playing.png";
-      au.currentTime=0;
-      au.play().catch(()=>{});
+  let can = false;
+  let playing = false;
+
+  // Start state: arrow is not visible at all
+  if(nx){
+    nx.style.display = "none";
+    nx.dataset.enabled = "0";
+  }
+
+  function play(){
+    if(playing) return;            // no overlaps
+    playing = true;
+
+    if(sp) sp.src = STIM + "speaker_playing.png";
+
+    try{ au.currentTime = 0; }catch(e){}
+    const p = au.play();
+    if(p && typeof p.catch === "function"){
+      p.catch(()=>{ playing = false; if(sp) sp.src = STIM + "speaker.png"; });
     }
+  }
 
-    sp.onclick=play;
+  if(sp) sp.onclick = play;
 
-    /*
-      Enables progression only after audio playback completes.
-    */
-    au.onended=()=>{
-      sp.src = STIM + "speaker.png";
-      can=true;
-      setNextEnabled(true);
-    };
+  // Title image must behave exactly like speaker
+  if(titleImg) titleImg.onclick = play;
 
-    nx.onclick=()=>{
+  au.onended = () => {
+    playing = false;
+    if(sp) sp.src = STIM + "speaker.png";
+    can = true;
+
+    // Only now the arrow appears
+    if(nx){
+      nx.style.display = "block";
+      nx.dataset.enabled = "1";
+    }
+  };
+
+  if(nx){
+    nx.onclick = () => {
       if(!can) return;
       jsPsych.finishTrial();
     };
   }
+}
+
 };
 
 /*
@@ -445,7 +497,7 @@ function layoutStimulus(row, mode){
       </div>
 
       <div class="navRow">
-        <img id="nx" class="disabled" src="${STIM}next_empty.png" data-enabled="0">
+<img id="nx" src="${STIM}next.png" data-enabled="0" style="display:none;">
       </div>
     </div>
   `;
@@ -468,23 +520,34 @@ function exampleTrial(row){
       const correctAudio =
         correct === "article1" ? row.article1_audio : row.article2_audio;
 
+      // Identify correct and wrong article tiles in DOM
+      const tileA1 = document.getElementById("tile_a1");
+      const tileA2 = document.getElementById("tile_a2");
+
+      const wrongTile = (correct === "article1") ? tileA2 : tileA1;
+
+      // 1) Whole sentence or pre-sentence on the top image only ONCE
       showHL("hl_topImg3");
       await playAudio(row.pre_sentence);
       hideHL("hl_topImg3");
 
-      showHL("hl_topImg3");
-      await playAudio(row.image3_audio);
-      hideHL("hl_topImg3");
-
+      // 2) Image2 (if you still want it as part of the guided flow)
       showHL("hl_img2");
       await playAudio(row.image2_audio);
       hideHL("hl_img2");
 
+      // 3) Correct article
       const artHL = correct === "article1" ? "hl_a1" : "hl_a2";
       showHL(artHL);
       await playAudio(correctAudio);
       hideHL(artHL);
 
+      // 4) Hide the incorrect article tile so only the correct sentence is visible
+      if(wrongTile){
+        wrongTile.style.visibility = "hidden"; // keeps spacing stable
+      }
+
+      // 5) Now mark the LAST image (right tile) and play the noun audio exactly once
       showHL("hl_img3");
       await playAudio(row.image3_audio);
       hideHL("hl_img3");
@@ -495,11 +558,12 @@ function exampleTrial(row){
   };
 }
 
+
 /*
   Interactive task trials.
   Handles user choices, feedback, retries, and final resolution.
 */
-function taskTrial(row){
+function taskTrial(row, idx){
   return {
     type:"html-button-response",
     choices:[],
@@ -510,14 +574,34 @@ function taskTrial(row){
       let attempts = 0;
       let chosen = null;
       let locked = false;
+      if(idx === 0 && !__yourturnPlayed){
+  __yourturnPlayed = true;
+
+  (async () => {
+    locked = true;
+    await playAudio(YOURTURN_FILE);
+    locked = false;
+  })();
+}
       let preDone = false;
       let speakerHeard = false;
+let heardA1 = false;
+let heardA2 = false;
 
-      const nx = document.getElementById("nx");
-      setNextEnabled(false);
+   const nx = document.getElementById("nx");
+
+// Hide next arrow until gating condition is met
+setNextEnabled(false);
+
 
       const tileA1 = document.getElementById("tile_a1");
       const tileA2 = document.getElementById("tile_a2");
+function hideWrongArticle(){
+  const wrongTile = (correct === "article1") ? tileA2 : tileA1;
+  if(wrongTile){
+    wrongTile.style.visibility = "hidden"; // keeps spacing stable
+  }
+}
 
       function hideYellow(){
         const y1 = document.getElementById("yl_a1");
@@ -532,11 +616,23 @@ function taskTrial(row){
       }
 
       function resetChoice(){
-        chosen = null;
-        hideYellow();
-        clearBadOutlines();
-        setNextEnabled(false);
-      }
+  chosen = null;
+  hideYellow();
+  clearBadOutlines();
+  updateNextGate();
+}
+function resetChoice(){
+  chosen = null;
+  hideYellow();
+  clearBadOutlines();
+  updateNextGate();
+}
+
+function updateNextGate(){
+  const gateReady = speakerHeard && heardA1 && heardA2;
+  setNextEnabled(!!(gateReady && chosen));
+}
+
 
       async function highlightPlay(hl, audio){
         showHL(hl);
@@ -549,23 +645,28 @@ function taskTrial(row){
         This gate must be completed before enabling progression.
       */
       async function playPreSentence(){
-        if(locked) return;
-        locked = true;
+  if(locked) return;
+  locked = true;
 
-        const spTask = document.getElementById("spTask");
-        if(spTask) spTask.src = STIM + "speaker_playing.png";
+  const spTask = document.getElementById("spTask");
+  if(spTask) spTask.src = STIM + "speaker_playing.png";
 
-        await highlightPlay("hl_topImg3", row.pre_sentence);
+  // 1) pre_sentence on top image
+  await highlightPlay("hl_topImg3", row.pre_sentence);
 
-        if(spTask) spTask.src = STIM + "speaker.png";
-        preDone = true;
-        speakerHeard = true;
-        locked = false;
+  // 2) ALSO read the first tile (image2) and highlight it
+  await highlightPlay("hl_img2", row.image2_audio);
 
-        if(chosen){
-          setNextEnabled(true);
-        }
-      }
+  if(spTask) spTask.src = STIM + "speaker.png";
+  preDone = true;
+  speakerHeard = true;
+  locked = false;
+
+  updateNextGate();
+}
+
+
+      
 
       async function clickTopImg3(){
         if(locked) return;
@@ -614,10 +715,12 @@ function taskTrial(row){
           showHL("yl_a2");
           await highlightPlay("hl_a2", row.article2_audio);
         }
+if(which === "article1") heardA1 = true;
+if(which === "article2") heardA2 = true;
 
-        if(speakerHeard){
-          setNextEnabled(true);
-        }
+updateNextGate();
+
+        
         locked = false;
       }
 
@@ -632,13 +735,17 @@ function taskTrial(row){
 
         const chosenTile = (chosen === "article1") ? tileA1 : tileA2;
 
-        if(chosen === correct){
-          nx.src = STIM + "stars.png";
-          await playAudio("stars_correct.mp3");
-          await playAudio(row.whole_sentence);
-          jsPsych.finishTrial();
-          return;
-        }
+if(chosen === correct){
+  hideWrongArticle();
+
+  nx.src = STIM + "stars.png";
+  await playAudio("stars_correct.mp3");
+  await playAudio(row.whole_sentence);
+
+  jsPsych.finishTrial();
+  return;
+}
+
 
         hideYellow();
         clearBadOutlines();
@@ -652,17 +759,21 @@ function taskTrial(row){
 
         await playAudio(row.incorrect_second_time);
 
-        clearBadOutlines();
-        hideYellow();
+clearBadOutlines();
+hideYellow();
 
-        if(correct === "article1"){
-          showHL("yl_a1");
-        } else {
-          showHL("yl_a2");
-        }
+if(correct === "article1"){
+  showHL("yl_a1");
+} else {
+  showHL("yl_a2");
+}
 
-        await playAudio(row.whole_sentence);
-        jsPsych.finishTrial();
+// NEW: hide the wrong article before resolving the sentence
+hideWrongArticle();
+
+await playAudio(row.whole_sentence);
+jsPsych.finishTrial();
+
       };
 
       const spTask = document.getElementById("spTask");
@@ -673,6 +784,8 @@ function taskTrial(row){
 
       tileA1.onclick = ()=>chooseArticle("article1");
       tileA2.onclick = ()=>chooseArticle("article2");
+      updateNextGate();
+
     }
   };
 }
@@ -711,7 +824,7 @@ const end = {
 const timeline = [];
 timeline.push(title);
 examples.forEach(r=>timeline.push(exampleTrial(r)));
-tasks.forEach(r=>timeline.push(taskTrial(r)));
+tasks.forEach((r,i)=>timeline.push(taskTrial(r,i)));
 timeline.push(end);
 
 /*
